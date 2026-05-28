@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
@@ -5,7 +6,29 @@ import xml.etree.ElementTree as ET
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = ROOT / "mjcf"
 OUTPUT_PATH = OUTPUT_DIR / "real_lite.xml"
-URDF_PATH = ROOT / "real_lite_lab" / "assets" / "tienkung2_lite_real" / "urdf" / "humanoid_publish.urdf"
+ASSET_ROOT_ENV_VAR = "TIENKUNG_LITE_ASSET_ROOT"
+DEFAULT_REAL_LITE_ASSET_ROOT = ROOT.parent / "lite_urdf_publish" / "x_humanoid_0430_newfeet_newbody_publish"
+
+
+def resolve_real_lite_asset_root() -> Path:
+    configured_path = os.getenv(ASSET_ROOT_ENV_VAR)
+    asset_root = Path(configured_path).expanduser().resolve() if configured_path else DEFAULT_REAL_LITE_ASSET_ROOT
+    if not asset_root.exists():
+        raise FileNotFoundError(
+            f"Real Lite assets not found at: {asset_root}\n"
+            f"Set {ASSET_ROOT_ENV_VAR} to the external asset directory that contains 'meshes' and 'urdf'."
+        )
+    return asset_root
+
+
+ASSET_ROOT = resolve_real_lite_asset_root()
+URDF_PATH = ASSET_ROOT / "urdf" / "humanoid_publish.urdf"
+MESH_DIR = ASSET_ROOT / "meshes"
+
+
+def _meshdir_for_xml() -> str:
+    relative_mesh_dir = os.path.relpath(MESH_DIR, OUTPUT_DIR)
+    return Path(relative_mesh_dir).as_posix().rstrip("/") + "/"
 
 # MuJoCo fullinertia order is:
 #   Ixx Iyy Izz Ixy Ixz Iyz
@@ -21,17 +44,16 @@ CRITICAL_MASS_LINKS = ("waist_link",)
 INERTIA_TOLERANCE = 1e-9
 MASS_TOLERANCE = 1e-6
 
-# WARNING: This MJCF is hand-converted from the URDF at:
-#   real_lite_lab/assets/tienkung2_lite_real/urdf/humanoid_publish.urdf
+# WARNING: This MJCF is hand-converted from the external URDF asset directory.
 # If the URDF changes (joint ranges, meshes, inertials, collision geometry),
 # this MJCF MUST be updated manually to match. sim2sim results are only
 # valid when MJCF and URDF agree on joint limits and dynamics.
 
-MJCF_TEXT = """<mujoco model="real_lite">
+MJCF_TEXT = f"""<mujoco model="real_lite">
   <option gravity="0 0 -9.81" solver="PGS"/>
   <option integrator="implicitfast"/>
   <size njmax="500" nconmax="100"/>
-  <compiler angle="radian" meshdir="../real_lite_lab/assets/tienkung2_lite_real/meshes/" eulerseq="zyx"/>
+  <compiler angle="radian" meshdir="{_meshdir_for_xml()}" eulerseq="zyx"/>
 
   <default>
     <joint type="hinge" limited="true"/>

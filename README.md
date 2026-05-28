@@ -2,8 +2,7 @@
 
 `TienKungLiteLab` is an independent Isaac Lab training pipeline for the TienKung Lite humanoid robot.
 
-This repository keeps the new architecture self-contained:
-- robot assets and URDF/USD live under `real_lite_lab/assets/tienkung2_lite_real`
+This repository keeps the new architecture self-contained except for the large robot geometry assets:
 - motion datasets live under `real_lite_lab/datasets`
 - task configs, environment code, and rewards live under `real_lite_lab`
 - training, export, and MuJoCo sim2sim entrypoints live at the repository root
@@ -24,6 +23,34 @@ Clone the repository outside the Isaac Lab source tree, then install both the ma
 cd TienKungLiteLab
 pip install -e .
 pip install -e ./rsl_rl
+```
+
+## External Robot Assets
+
+The large robot resource files are not stored in this repository.
+
+Expected external asset directory contents:
+- `meshes/`
+- `urdf/`
+
+By default, the code looks for assets at:
+
+```text
+../lite_urdf_publish/x_humanoid_0430_newfeet_newbody_publish
+```
+
+relative to the repository parent directory.
+
+If your assets live somewhere else, set:
+
+```bash
+export TIENKUNG_LITE_ASSET_ROOT=/path/to/x_humanoid_0430_newfeet_newbody_publish
+```
+
+On Windows PowerShell:
+
+```powershell
+$env:TIENKUNG_LITE_ASSET_ROOT="D:\path\to\x_humanoid_0430_newfeet_newbody_publish"
 ```
 
 ## Repository Layout

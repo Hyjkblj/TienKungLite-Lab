@@ -4,9 +4,10 @@ import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets.articulation import ArticulationCfg
 
+from .. import resolve_real_lite_asset_root
 from ...constants import DEFAULT_JOINT_POS
 
-ASSET_DIR = Path(__file__).resolve().parent
+ASSET_DIR = resolve_real_lite_asset_root()
 
 REAL_LITE_ARTICULATION_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
