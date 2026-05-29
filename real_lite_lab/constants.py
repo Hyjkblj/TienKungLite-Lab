@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 
@@ -123,6 +124,23 @@ AMP_EXPERT_FRAME_DIM = POLICY_JOINT_COUNT * 2 + END_EFFECTOR_POS_DIM
 if len(DEFAULT_JOINT_POS) != POLICY_JOINT_COUNT:
     raise ValueError("DEFAULT_JOINT_POS and POLICY_JOINT_NAMES must describe the same joints.")
 
+
+def _infer_motion_cycle_seconds(motion_file: Path, default: float) -> float:
+    """Infer one loop duration from a visualization motion file when available."""
+    if not motion_file.is_file():
+        return default
+
+    try:
+        motion_data = json.loads(motion_file.read_text(encoding="utf-8"))
+        frame_duration = float(motion_data["FrameDuration"])
+        num_frames = len(motion_data["Frames"])
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return default
+
+    if frame_duration <= 0.0 or num_frames <= 0:
+        return default
+    return frame_duration * num_frames
+
 TASK_PRESETS = {
     "walk_real_lite": {
         "gait_air_ratio_l": 0.38,
@@ -142,4 +160,16 @@ TASK_PRESETS = {
         "amp_motion_file": DATASETS_DIR / "motion_amp_expert" / "run.txt",
         "display_motion_file": DATASETS_DIR / "motion_visualization" / "run.txt",
     },
+    "upper_body_real_lite": {
+        "gait_air_ratio_l": 0.5,
+        "gait_air_ratio_r": 0.5,
+        "gait_phase_offset_l": 0.0,
+        "gait_phase_offset_r": 0.0,
+        # Keep the phase signal aligned with the actual upper-body clip once the dataset exists.
+        "gait_cycle": _infer_motion_cycle_seconds(DATASETS_DIR / "motion_visualization" / "upper_body.txt", 1.0),
+        "amp_motion_file": DATASETS_DIR / "motion_amp_expert" / "upper_body.txt",
+        "display_motion_file": DATASETS_DIR / "motion_visualization" / "upper_body.txt",
+    },
 }
+
+TASK_NAMES = tuple(TASK_PRESETS.keys())

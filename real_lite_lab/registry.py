@@ -3,6 +3,7 @@ from __future__ import annotations
 from .env import RealLiteEnv
 from .run_cfg import RealLiteRunAgentCfg, RealLiteRunEnvCfg
 from .task_registry import task_registry
+from .upper_body_cfg import RealLiteUpperBodyAgentCfg, RealLiteUpperBodyEnvCfg
 from .walk_cfg import RealLiteWalkAgentCfg, RealLiteWalkEnvCfg
 
 _REGISTERED = False
@@ -14,4 +15,5 @@ def register_tasks():
         return
     task_registry.register("walk_real_lite", RealLiteEnv, RealLiteWalkEnvCfg(), RealLiteWalkAgentCfg())
     task_registry.register("run_real_lite", RealLiteEnv, RealLiteRunEnvCfg(), RealLiteRunAgentCfg())
+    task_registry.register("upper_body_real_lite", RealLiteEnv, RealLiteUpperBodyEnvCfg(), RealLiteUpperBodyAgentCfg())
     _REGISTERED = True

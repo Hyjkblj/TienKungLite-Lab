@@ -19,10 +19,11 @@ _RUNNERS = {"OnPolicyRunner": OnPolicyRunner, "AmpOnPolicyRunner": AmpOnPolicyRu
 from real_lite_lab import register_tasks, task_registry
 from real_lite_lab import cli_args
 from real_lite_lab.cli_args import update_rsl_rl_cfg
+from real_lite_lab.constants import TASK_NAMES
 
 
 parser = argparse.ArgumentParser(description="Train Real Lite RL tasks.")
-parser.add_argument("--task", type=str, required=True, choices=["walk_real_lite", "run_real_lite"])
+parser.add_argument("--task", type=str, required=True, choices=TASK_NAMES)
 parser.add_argument("--num_envs", type=int, default=None)
 parser.add_argument("--seed", type=int, default=None)
 cli_args.add_rsl_rl_args(parser)

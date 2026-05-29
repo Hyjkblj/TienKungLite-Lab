@@ -18,10 +18,11 @@ _RUNNERS = {"OnPolicyRunner": OnPolicyRunner, "AmpOnPolicyRunner": AmpOnPolicyRu
 from real_lite_lab import register_tasks, task_registry
 from real_lite_lab import cli_args
 from real_lite_lab.cli_args import update_rsl_rl_cfg
+from real_lite_lab.constants import TASK_NAMES
 
 
 parser = argparse.ArgumentParser(description="Export Real Lite policies.")
-parser.add_argument("--task", type=str, required=True, choices=["walk_real_lite", "run_real_lite"])
+parser.add_argument("--task", type=str, required=True, choices=TASK_NAMES)
 parser.add_argument("--num_envs", type=int, default=None)
 parser.add_argument("--seed", type=int, default=None)
 cli_args.add_rsl_rl_args(parser)
@@ -41,9 +42,17 @@ def main():
     env_cfg.scene.max_episode_length_s = 40.0
     env_cfg.scene.num_envs = 50
     env_cfg.scene.env_spacing = 2.5
-    env_cfg.commands.rel_standing_envs = 0.0
-    env_cfg.commands.ranges.lin_vel_x = (1.0, 1.0)
-    env_cfg.commands.ranges.lin_vel_y = (0.0, 0.0)
+    if args_cli.task == "upper_body_real_lite":
+        env_cfg.commands.rel_standing_envs = 1.0
+        env_cfg.commands.rel_heading_envs = 0.0
+        env_cfg.commands.heading_command = False
+        env_cfg.commands.ranges.lin_vel_x = (0.0, 0.0)
+        env_cfg.commands.ranges.lin_vel_y = (0.0, 0.0)
+        env_cfg.commands.ranges.ang_vel_z = (0.0, 0.0)
+    else:
+        env_cfg.commands.rel_standing_envs = 0.0
+        env_cfg.commands.ranges.lin_vel_x = (1.0, 1.0)
+        env_cfg.commands.ranges.lin_vel_y = (0.0, 0.0)
     env_cfg.scene.height_scanner.drift_range = (0.0, 0.0)
     env_cfg.scene.terrain_generator = None
     env_cfg.scene.terrain_type = "plane"

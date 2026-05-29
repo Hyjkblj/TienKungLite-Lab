@@ -7,7 +7,6 @@ import mujoco
 import mujoco_viewer
 import numpy as np
 import torch
-from pynput import keyboard
 
 PIPELINE_DIR = Path(__file__).resolve().parent
 if str(PIPELINE_DIR) not in sys.path:
@@ -19,6 +18,7 @@ from real_lite_lab.constants import (
     OBS_PER_STEP_DIM,
     POLICY_JOINT_COUNT,
     POLICY_JOINT_NAMES,
+    TASK_NAMES,
     TASK_PRESETS,
 )
 
@@ -43,6 +43,7 @@ class RealLiteSim2SimCfg:
         clip_observations = 100.0
         clip_actions = 100.0
         action_scale = 0.25
+        enable_keyboard_commands = True
 
     class robot:
         gait_air_ratio_l = TASK_PRESETS["walk_real_lite"]["gait_air_ratio_l"]
@@ -138,6 +139,16 @@ class RealLiteMujocoRunner:
         self.command_vel[idx] = np.clip(self.command_vel[idx], -1.0, 1.0)
 
     def setup_keyboard_listener(self):
+        if not self.cfg.sim.enable_keyboard_commands:
+            self.listener = None
+            return
+
+        try:
+            from pynput import keyboard
+        except ImportError:
+            self.listener = None
+            return
+
         def on_press(key):
             try:
                 if key.char == "8":
@@ -159,7 +170,8 @@ class RealLiteMujocoRunner:
 
     def run(self):
         self.setup_keyboard_listener()
-        self.listener.start()
+        if self.listener is not None:
+            self.listener.start()
         while self.data.time < self.cfg.sim.sim_duration:
             self.obs_history = self.get_obs()
             action_tensor = self.policy(torch.tensor(self.obs_history, dtype=torch.float32))
@@ -179,13 +191,15 @@ class RealLiteMujocoRunner:
             self.episode_length_buf += 1
             self.calculate_gait_para()
 
-        self.listener.stop()
+        if self.listener is not None:
+            self.listener.stop()
         self.viewer.close()
 
 
 def build_cfg(task_name: str, duration: float) -> RealLiteSim2SimCfg:
     cfg = RealLiteSim2SimCfg()
     cfg.sim.sim_duration = duration
+    cfg.sim.enable_keyboard_commands = task_name != "upper_body_real_lite"
     preset = TASK_PRESETS[task_name]
     cfg.robot.gait_air_ratio_l = preset["gait_air_ratio_l"]
     cfg.robot.gait_air_ratio_r = preset["gait_air_ratio_r"]
@@ -197,7 +211,7 @@ def build_cfg(task_name: str, duration: float) -> RealLiteSim2SimCfg:
 
 def main():
     parser = argparse.ArgumentParser(description="Run Real Lite sim2sim Mujoco controller.")
-    parser.add_argument("--task", required=True, choices=["walk_real_lite", "run_real_lite"])
+    parser.add_argument("--task", required=True, choices=TASK_NAMES)
     parser.add_argument("--policy", required=True, help="Path to exported policy.pt")
     parser.add_argument("--model", default=str(MJCF_PATH), help="Path to Real Lite MuJoCo XML")
     parser.add_argument("--duration", type=float, default=100.0)
