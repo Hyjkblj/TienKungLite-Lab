@@ -3,21 +3,14 @@ import os
 import sys
 from pathlib import Path
 
+import torch
+from isaaclab.app import AppLauncher
+
 PIPELINE_DIR = Path(__file__).resolve().parent
 if str(PIPELINE_DIR) not in sys.path:
     sys.path.insert(0, str(PIPELINE_DIR))
 
-import torch
-from isaaclab.app import AppLauncher
-from isaaclab_rl.rsl_rl import export_policy_as_jit, export_policy_as_onnx
-from isaaclab_tasks.utils import get_checkpoint_path
-from rsl_rl.runners import AmpOnPolicyRunner, OnPolicyRunner
-
-_RUNNERS = {"OnPolicyRunner": OnPolicyRunner, "AmpOnPolicyRunner": AmpOnPolicyRunner}
-
-from real_lite_lab import register_tasks, task_registry
-from real_lite_lab import cli_args
-from real_lite_lab.cli_args import update_rsl_rl_cfg
+import real_lite_lab.cli_args as cli_args
 from real_lite_lab.constants import TASK_NAMES
 
 
@@ -31,6 +24,14 @@ args_cli, hydra_args = parser.parse_known_args()
 
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
+
+from rsl_rl.runners import AmpOnPolicyRunner, OnPolicyRunner
+
+from real_lite_lab import register_tasks, task_registry
+from real_lite_lab.cli_args import update_rsl_rl_cfg
+from real_lite_lab.isaaclab_compat import export_policy_as_jit, export_policy_as_onnx, get_checkpoint_path
+
+_RUNNERS = {"OnPolicyRunner": OnPolicyRunner, "AmpOnPolicyRunner": AmpOnPolicyRunner}
 
 
 def main():

@@ -4,21 +4,14 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import torch
+from isaaclab.app import AppLauncher
+
 PIPELINE_DIR = Path(__file__).resolve().parent
 if str(PIPELINE_DIR) not in sys.path:
     sys.path.insert(0, str(PIPELINE_DIR))
 
-import torch
-from isaaclab.app import AppLauncher
-from isaaclab.utils.io import dump_yaml
-from isaaclab_tasks.utils import get_checkpoint_path
-from rsl_rl.runners import AmpOnPolicyRunner, OnPolicyRunner
-
-_RUNNERS = {"OnPolicyRunner": OnPolicyRunner, "AmpOnPolicyRunner": AmpOnPolicyRunner}
-
-from real_lite_lab import register_tasks, task_registry
-from real_lite_lab import cli_args
-from real_lite_lab.cli_args import update_rsl_rl_cfg
+import real_lite_lab.cli_args as cli_args
 from real_lite_lab.constants import TASK_NAMES
 
 
@@ -32,6 +25,14 @@ args_cli, hydra_args = parser.parse_known_args()
 
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
+
+from rsl_rl.runners import AmpOnPolicyRunner, OnPolicyRunner
+
+from real_lite_lab import register_tasks, task_registry
+from real_lite_lab.cli_args import update_rsl_rl_cfg
+from real_lite_lab.isaaclab_compat import dump_yaml, get_checkpoint_path
+
+_RUNNERS = {"OnPolicyRunner": OnPolicyRunner, "AmpOnPolicyRunner": AmpOnPolicyRunner}
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True

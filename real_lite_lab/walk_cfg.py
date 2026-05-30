@@ -6,11 +6,6 @@ from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import configclass
-from isaaclab_rl.rsl_rl import (
-    RslRlOnPolicyRunnerCfg,
-    RslRlPpoActorCriticCfg,
-    RslRlPpoAlgorithmCfg,
-)
 
 from . import mdp as base_mdp
 from .assets.tienkung2_lite_real import REAL_LITE_ARTICULATION_CFG
@@ -42,6 +37,7 @@ from .constants import (
     TASK_PRESETS,
 )
 from . import rewards as rl_rewards
+from .isaaclab_compat import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, RslRlPpoAlgorithmCfg
 from .terrain_cfg import REAL_LITE_GRAVEL_TERRAINS_CFG
 
 
