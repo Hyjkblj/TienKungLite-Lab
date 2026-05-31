@@ -284,6 +284,7 @@ class RealLiteWalkEnvCfg:
     sim: SimCfg = SimCfg(dt=0.005, decimation=4, physx=PhysxCfg(gpu_max_rigid_patch_count=10 * 2**15))
 
 
+@configclass
 class RealLiteWalkAgentCfg(RslRlOnPolicyRunnerCfg):
     seed = 42
     device = "cuda:0"
