@@ -6,12 +6,11 @@ from dataclasses import MISSING
 from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import SceneEntityCfg
-from isaaclab.sensors.camera import TiledCameraCfg
 from isaaclab.terrains.terrain_generator_cfg import TerrainGeneratorCfg
 from isaaclab.utils import configclass
 
 from . import mdp as base_mdp
-from .sensor_cfgs import LidarCfg
+from .sensor_cfgs import DepthCameraCfg, LidarCfg
 
 
 @configclass
@@ -40,7 +39,7 @@ class BaseSceneCfg:
     max_init_terrain_level: int = 5
     height_scanner: HeightScannerCfg = HeightScannerCfg()
     lidar: LidarCfg = LidarCfg()
-    depth_camera: TiledCameraCfg = TiledCameraCfg()
+    depth_camera: DepthCameraCfg = DepthCameraCfg()
     seed: int = 42
 
 
