@@ -15,6 +15,7 @@ from .base_config import (
     DomainRandCfg,
     EventCfg,
     HeightScannerCfg,
+    RobotCfg,
 )
 from .constants import (
     ANKLE_JOINT_NAMES,
@@ -145,7 +146,7 @@ class RealLiteUpperBodyEnvCfg(RealLiteWalkEnvCfg):
             drift_range=(0.0, 0.0),
         ),
     )
-    robot = RealLiteWalkEnvCfg.robot.__class__(
+    robot: RobotCfg = RobotCfg(
         actor_obs_history_length=10,
         critic_obs_history_length=10,
         action_scale=0.25,
