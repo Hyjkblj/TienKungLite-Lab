@@ -4,6 +4,7 @@ import isaaclab.sim as sim_utils
 import isaacsim.core.utils.torch as torch_utils  # type: ignore
 import numpy as np
 import torch
+from pathlib import Path
 from isaaclab.assets.articulation import Articulation
 from isaaclab.envs.mdp.commands import UniformVelocityCommand, UniformVelocityCommandCfg
 from isaaclab.managers import EventManager, RewardManager
@@ -37,9 +38,12 @@ from .constants import (
     VIS_ROOT_LIN_VEL_SLICE,
     VISUALIZATION_FRAME_DIM,
 )
+from .runtime_paths import ensure_writable_isaaclab_tmp
 from .run_cfg import RealLiteRunEnvCfg
 from .scene import SceneCfg
 from .walk_cfg import RealLiteWalkEnvCfg
+
+PIPELINE_DIR = Path(__file__).resolve().parents[1]
 
 
 def _build_actor_obs_slices(num_actions: int) -> dict[str, slice]:
@@ -91,6 +95,7 @@ class RealLiteEnv(VecEnv):
                 dynamic_friction=1.0,
             ),
         )
+        ensure_writable_isaaclab_tmp(PIPELINE_DIR / "logs" / "_isaaclab_tmp")
         self.sim = SimulationContext(sim_cfg)
 
         scene_cfg = SceneCfg(config=cfg.scene, physics_dt=self.physics_dt, step_dt=self.step_dt)
