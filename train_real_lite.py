@@ -51,31 +51,47 @@ def main():
     agent_cfg = update_rsl_rl_cfg(agent_cfg, args_cli)
     env_cfg.scene.seed = agent_cfg.seed
 
-    env = env_class(env_cfg, args_cli.headless)
+    env = None
+    runner = None
+    try:
+        env = env_class(env_cfg, args_cli.headless)
 
-    log_root_path = os.path.abspath(os.path.join(PIPELINE_DIR, "logs", agent_cfg.experiment_name))
-    print(f"[INFO] Logging experiment in directory: {log_root_path}")
+        log_root_path = os.path.abspath(os.path.join(PIPELINE_DIR, "logs", agent_cfg.experiment_name))
+        print(f"[INFO] Logging experiment in directory: {log_root_path}")
 
-    log_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    if agent_cfg.run_name:
-        log_dir += f"_{agent_cfg.run_name}"
-    log_dir = os.path.join(log_root_path, log_dir)
+        log_dir = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        if agent_cfg.run_name:
+            log_dir += f"_{agent_cfg.run_name}"
+        log_dir = os.path.join(log_root_path, log_dir)
 
-    if agent_cfg.runner_class_name not in _RUNNERS:
-        raise ValueError(f"Unknown runner_class_name: {agent_cfg.runner_class_name!r}, expected one of {list(_RUNNERS)}")
-    runner_class = _RUNNERS[agent_cfg.runner_class_name]
-    runner = runner_class(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+        if agent_cfg.runner_class_name not in _RUNNERS:
+            raise ValueError(
+                f"Unknown runner_class_name: {agent_cfg.runner_class_name!r}, expected one of {list(_RUNNERS)}"
+            )
+        runner_class = _RUNNERS[agent_cfg.runner_class_name]
+        runner = runner_class(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
 
-    if agent_cfg.resume:
-        resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
-        print(f"[INFO] Loading model checkpoint from: {resume_path}")
-        runner.load(resume_path)
+        if agent_cfg.resume:
+            resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
+            print(f"[INFO] Loading model checkpoint from: {resume_path}")
+            runner.load(resume_path)
 
-    dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
-    dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
-    runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
+        dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
+        dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
+        runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
+    finally:
+        if runner is not None:
+            close_runner = getattr(runner, "close", None)
+            if callable(close_runner):
+                close_runner()
+        if env is not None:
+            close_env = getattr(env, "close", None)
+            if callable(close_env):
+                close_env()
 
 
 if __name__ == "__main__":
-    main()
-    simulation_app.close()
+    try:
+        main()
+    finally:
+        simulation_app.close()
