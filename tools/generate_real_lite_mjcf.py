@@ -77,42 +77,45 @@ def _meshdir_for_xml() -> str:
     return Path(relative_mesh_dir).as_posix().rstrip("/") + "/"
 
 
-def _is_ascii_stl(mesh_path: Path) -> bool:
-    try:
-        header = mesh_path.read_bytes()[:4096]
-    except OSError:
+def _is_valid_binary_stl_bytes(stl_bytes: bytes) -> bool:
+    if len(stl_bytes) < 84:
         return False
-    if not header:
+
+    triangle_data_length = len(stl_bytes) - 84
+    if triangle_data_length <= 0 or triangle_data_length % 50 != 0:
         return False
-    try:
-        header_text = header.decode("utf-8")
-    except UnicodeDecodeError:
-        return False
-    return "facet normal" in header_text and "vertex" in header_text
+
+    expected_triangle_count = triangle_data_length // 50
+    declared_triangle_count = struct.unpack("<I", stl_bytes[80:84])[0]
+    return declared_triangle_count == expected_triangle_count
 
 
-def _parse_ascii_stl(mesh_path: Path) -> list[tuple[tuple[float, float, float], list[tuple[float, float, float]]]]:
+def _parse_ascii_stl(stl_bytes: bytes, mesh_path: Path) -> list[tuple[tuple[float, float, float], list[tuple[float, float, float]]]]:
     triangles: list[tuple[tuple[float, float, float], list[tuple[float, float, float]]]] = []
     current_normal: tuple[float, float, float] | None = None
     current_vertices: list[tuple[float, float, float]] = []
 
-    with mesh_path.open("r", encoding="utf-8") as handle:
-        for raw_line in handle:
-            line = raw_line.strip()
-            if not line:
-                continue
-            tokens = line.split()
-            if tokens[0] == "facet" and len(tokens) >= 5 and tokens[1] == "normal":
-                current_normal = (float(tokens[2]), float(tokens[3]), float(tokens[4]))
-                current_vertices = []
-            elif tokens[0] == "vertex" and len(tokens) >= 4:
-                current_vertices.append((float(tokens[1]), float(tokens[2]), float(tokens[3])))
-            elif tokens[0] == "endfacet":
-                if current_normal is None or len(current_vertices) != 3:
-                    raise ValueError(f"Malformed ASCII STL facet in {mesh_path}")
-                triangles.append((current_normal, current_vertices.copy()))
-                current_normal = None
-                current_vertices = []
+    decoded_text = stl_bytes.decode("utf-8", errors="ignore")
+    for raw_line in decoded_text.splitlines():
+        line = raw_line.strip().lstrip("\ufeff")
+        if not line:
+            continue
+        tokens = line.split()
+        if not tokens:
+            continue
+
+        keyword = tokens[0].lower()
+        if keyword == "facet" and len(tokens) >= 5 and tokens[1].lower() == "normal":
+            current_normal = (float(tokens[2]), float(tokens[3]), float(tokens[4]))
+            current_vertices = []
+        elif keyword == "vertex" and len(tokens) >= 4:
+            current_vertices.append((float(tokens[1]), float(tokens[2]), float(tokens[3])))
+        elif keyword == "endfacet":
+            if current_normal is None or len(current_vertices) != 3:
+                raise ValueError(f"Malformed ASCII STL facet in {mesh_path}")
+            triangles.append((current_normal, current_vertices.copy()))
+            current_normal = None
+            current_vertices = []
 
     if not triangles:
         raise ValueError(f"No triangles found in ASCII STL file: {mesh_path}")
@@ -141,11 +144,17 @@ def _prepare_mujoco_mesh_cache() -> None:
         if not mesh_path.is_file():
             continue
         output_path = GENERATED_MESH_DIR / mesh_path.name
-        if mesh_path.suffix.lower() == ".stl" and _is_ascii_stl(mesh_path):
-            triangles = _parse_ascii_stl(mesh_path)
-            _write_binary_stl(output_path, triangles)
-        else:
+        if mesh_path.suffix.lower() != ".stl":
             shutil.copy2(mesh_path, output_path)
+            continue
+
+        stl_bytes = mesh_path.read_bytes()
+        if _is_valid_binary_stl_bytes(stl_bytes):
+            shutil.copy2(mesh_path, output_path)
+            continue
+
+        triangles = _parse_ascii_stl(stl_bytes, mesh_path)
+        _write_binary_stl(output_path, triangles)
 
 # MuJoCo fullinertia order is:
 #   Ixx Iyy Izz Ixy Ixz Iyz
