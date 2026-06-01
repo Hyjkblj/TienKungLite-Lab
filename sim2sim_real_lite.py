@@ -1,12 +1,35 @@
 import argparse
+import os
+import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
 
+
+def _cli_requests_offscreen(argv: list[str]) -> bool:
+    for arg in argv:
+        if arg == "--save_video" or arg.startswith("--save_video="):
+            return True
+    return False
+
+
+if _cli_requests_offscreen(sys.argv[1:]):
+    os.environ.setdefault("MUJOCO_GL", "egl")
+
 import mujoco
-import mujoco_viewer
 import numpy as np
 import torch
+
+try:
+    import imageio.v2 as imageio
+except ModuleNotFoundError:
+    imageio = None
+
+try:
+    import mujoco_viewer
+except ModuleNotFoundError:
+    mujoco_viewer = None
 
 PIPELINE_DIR = Path(__file__).resolve().parent
 if str(PIPELINE_DIR) not in sys.path:
@@ -53,15 +76,131 @@ class RealLiteSim2SimCfg:
         gait_cycle = TASK_PRESETS["walk_real_lite"]["gait_cycle"]
 
 
+class _ImageioVideoSink:
+    def __init__(self, output_path: Path, fps: float):
+        if imageio is None:
+            raise RuntimeError("imageio is not installed.")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        self._writer = imageio.get_writer(str(output_path), fps=fps, codec="libx264")
+
+    def write_frame(self, frame: np.ndarray) -> None:
+        self._writer.append_data(frame)
+
+    def close(self) -> None:
+        self._writer.close()
+
+
+class _FFmpegVideoSink:
+    def __init__(self, output_path: Path, fps: float, width: int, height: int):
+        ffmpeg_path = shutil.which("ffmpeg")
+        if ffmpeg_path is None:
+            raise RuntimeError("ffmpeg is not available on PATH.")
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        command = [
+            ffmpeg_path,
+            "-y",
+            "-f",
+            "rawvideo",
+            "-vcodec",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-s",
+            f"{width}x{height}",
+            "-r",
+            f"{fps:.6f}",
+            "-i",
+            "-",
+            "-an",
+            "-vcodec",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            str(output_path),
+        ]
+        self._process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+
+    def write_frame(self, frame: np.ndarray) -> None:
+        if self._process.stdin is None:
+            raise RuntimeError("ffmpeg stdin is not available.")
+        self._process.stdin.write(frame.tobytes())
+
+    def close(self) -> None:
+        if self._process.stdin is not None:
+            self._process.stdin.close()
+        stderr_output = b""
+        if self._process.stderr is not None:
+            stderr_output = self._process.stderr.read()
+        return_code = self._process.wait()
+        if return_code != 0:
+            stderr_text = stderr_output.decode("utf-8", errors="replace").strip()
+            raise RuntimeError(f"ffmpeg failed with exit code {return_code}: {stderr_text}")
+
+
+def _create_video_sink(output_path: Path, fps: float, width: int, height: int):
+    errors: list[str] = []
+    try:
+        return _ImageioVideoSink(output_path=output_path, fps=fps)
+    except Exception as exc:
+        errors.append(f"imageio backend failed: {exc}")
+
+    try:
+        return _FFmpegVideoSink(output_path=output_path, fps=fps, width=width, height=height)
+    except Exception as exc:
+        errors.append(f"ffmpeg backend failed: {exc}")
+
+    raise RuntimeError(
+        "Unable to create an mp4 writer. Install imageio/ffmpeg or add ffmpeg to PATH.\n"
+        + "\n".join(errors)
+    )
+
+
 class RealLiteMujocoRunner:
-    def __init__(self, cfg: RealLiteSim2SimCfg, policy_path: Path, model_path: Path):
+    def __init__(
+        self,
+        cfg: RealLiteSim2SimCfg,
+        policy_path: Path,
+        model_path: Path,
+        *,
+        save_video: Path | None = None,
+        video_fps: float = 30.0,
+        width: int = 1280,
+        height: int = 720,
+        camera: str | None = None,
+    ):
         self.cfg = cfg
         self.model = mujoco.MjModel.from_xml_path(str(model_path))
         self.model.opt.timestep = self.cfg.sim.dt
         self.policy = torch.jit.load(str(policy_path))
         self.data = mujoco.MjData(self.model)
-        self.viewer = mujoco_viewer.MujocoViewer(self.model, self.data)
-        self.viewer._render_every_frame = False
+
+        self.save_video = save_video
+        self.video_fps = video_fps
+        self.camera = camera
+        self.frame_interval = 1.0 / video_fps if save_video is not None else None
+        self.next_frame_time = 0.0
+        self.viewer = None
+        self.renderer = None
+        self.video_sink = None
+
+        if self.save_video is None:
+            if mujoco_viewer is None:
+                raise RuntimeError(
+                    "mujoco_viewer is not installed. Use --save_video for headless export, "
+                    "or install mujoco_viewer for interactive visualization."
+                )
+            self.viewer = mujoco_viewer.MujocoViewer(self.model, self.data)
+            self.viewer._render_every_frame = False
+        else:
+            self.renderer = mujoco.Renderer(self.model, height=height, width=width)
+            self.video_sink = _create_video_sink(self.save_video, fps=video_fps, width=width, height=height)
+
         self.init_variables()
 
     def init_variables(self):
@@ -104,7 +243,7 @@ class RealLiteMujocoRunner:
     def get_obs(self) -> np.ndarray:
         n = self.cfg.sim.num_action
         self.dof_pos = self.data.sensordata[0:n]
-        self.dof_vel = self.data.sensordata[n:2*n]
+        self.dof_vel = self.data.sensordata[n : 2 * n]
         obs = np.concatenate(
             [
                 self.data.sensor("angular-velocity").data.astype(np.double),
@@ -126,7 +265,7 @@ class RealLiteMujocoRunner:
             raise ValueError(
                 f"Observation size mismatch: expected {self.cfg.sim.num_obs_per_step}, got {obs.shape[0]}."
             )
-        self.obs_history[:-self.cfg.sim.num_obs_per_step] = self.obs_history[self.cfg.sim.num_obs_per_step :]
+        self.obs_history[: -self.cfg.sim.num_obs_per_step] = self.obs_history[self.cfg.sim.num_obs_per_step :]
         self.obs_history[-self.cfg.sim.num_obs_per_step :] = obs.copy()
         return np.clip(self.obs_history, -self.cfg.sim.clip_observations, self.cfg.sim.clip_observations)
 
@@ -139,7 +278,7 @@ class RealLiteMujocoRunner:
         self.command_vel[idx] = np.clip(self.command_vel[idx], -1.0, 1.0)
 
     def setup_keyboard_listener(self):
-        if not self.cfg.sim.enable_keyboard_commands:
+        if not self.cfg.sim.enable_keyboard_commands or self.viewer is None:
             self.listener = None
             return
 
@@ -168,38 +307,76 @@ class RealLiteMujocoRunner:
 
         self.listener = keyboard.Listener(on_press=on_press)
 
+    def _render_offscreen_frame(self) -> None:
+        if self.renderer is None or self.video_sink is None:
+            return
+        if self.camera is None:
+            self.renderer.update_scene(self.data)
+        else:
+            self.renderer.update_scene(self.data, camera=self.camera)
+        frame = self.renderer.render()
+        self.video_sink.write_frame(frame)
+
+    def _close_rendering(self) -> None:
+        if self.viewer is not None:
+            self.viewer.close()
+            self.viewer = None
+        if self.video_sink is not None:
+            self.video_sink.close()
+            self.video_sink = None
+        if self.renderer is not None:
+            close_renderer = getattr(self.renderer, "close", None)
+            if callable(close_renderer):
+                close_renderer()
+            self.renderer = None
+
     def run(self):
         self.setup_keyboard_listener()
         if self.listener is not None:
             self.listener.start()
-        while self.data.time < self.cfg.sim.sim_duration:
-            self.obs_history = self.get_obs()
-            action_tensor = self.policy(torch.tensor(self.obs_history, dtype=torch.float32))
-            self.action[:] = action_tensor.detach().cpu().numpy()[:self.cfg.sim.num_action]
-            self.action = np.clip(self.action, -self.cfg.sim.clip_actions, self.cfg.sim.clip_actions)
 
-            for _ in range(self.cfg.sim.decimation):
-                step_start_time = time.time()
-                self.data.ctrl = self.position_control()
-                mujoco.mj_step(self.model, self.data)
-                self.viewer.render()
-                elapsed = time.time() - step_start_time
-                sleep_time = self.cfg.sim.dt - elapsed
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
+        try:
+            if self.save_video is not None:
+                self._render_offscreen_frame()
+                self.next_frame_time = self.frame_interval
 
-            self.episode_length_buf += 1
-            self.calculate_gait_para()
+            while self.data.time < self.cfg.sim.sim_duration:
+                self.obs_history = self.get_obs()
+                action_tensor = self.policy(torch.tensor(self.obs_history, dtype=torch.float32))
+                self.action[:] = action_tensor.detach().cpu().numpy()[: self.cfg.sim.num_action]
+                self.action = np.clip(self.action, -self.cfg.sim.clip_actions, self.cfg.sim.clip_actions)
 
-        if self.listener is not None:
-            self.listener.stop()
-        self.viewer.close()
+                for _ in range(self.cfg.sim.decimation):
+                    step_start_time = time.time()
+                    self.data.ctrl = self.position_control()
+                    mujoco.mj_step(self.model, self.data)
+                    if self.viewer is not None:
+                        self.viewer.render()
+                        elapsed = time.time() - step_start_time
+                        sleep_time = self.cfg.sim.dt - elapsed
+                        if sleep_time > 0:
+                            time.sleep(sleep_time)
+
+                if self.save_video is not None and self.frame_interval is not None:
+                    while self.data.time + 1e-9 >= self.next_frame_time:
+                        self._render_offscreen_frame()
+                        self.next_frame_time += self.frame_interval
+
+                self.episode_length_buf += 1
+                self.calculate_gait_para()
+        finally:
+            if self.listener is not None:
+                self.listener.stop()
+            self._close_rendering()
+
+        if self.save_video is not None:
+            print(f"[INFO] Saved rollout video to: {self.save_video}")
 
 
-def build_cfg(task_name: str, duration: float) -> RealLiteSim2SimCfg:
+def build_cfg(task_name: str, duration: float, enable_keyboard_commands: bool) -> RealLiteSim2SimCfg:
     cfg = RealLiteSim2SimCfg()
     cfg.sim.sim_duration = duration
-    cfg.sim.enable_keyboard_commands = task_name != "upper_body_real_lite"
+    cfg.sim.enable_keyboard_commands = enable_keyboard_commands and task_name != "upper_body_real_lite"
     preset = TASK_PRESETS[task_name]
     cfg.robot.gait_air_ratio_l = preset["gait_air_ratio_l"]
     cfg.robot.gait_air_ratio_r = preset["gait_air_ratio_r"]
@@ -215,10 +392,16 @@ def main():
     parser.add_argument("--policy", required=True, help="Path to exported policy.pt")
     parser.add_argument("--model", default=str(MJCF_PATH), help="Path to Real Lite MuJoCo XML")
     parser.add_argument("--duration", type=float, default=100.0)
+    parser.add_argument("--save_video", default=None, help="Optional output mp4 path for headless offscreen rendering.")
+    parser.add_argument("--fps", type=float, default=30.0, help="Video FPS when --save_video is set.")
+    parser.add_argument("--width", type=int, default=1280, help="Video width when --save_video is set.")
+    parser.add_argument("--height", type=int, default=720, help="Video height when --save_video is set.")
+    parser.add_argument("--camera", default=None, help="Optional MuJoCo camera name for offscreen rendering.")
     args = parser.parse_args()
 
     policy_path = Path(args.policy).resolve()
     model_path = Path(args.model).resolve()
+    save_video_path = Path(args.save_video).resolve() if args.save_video else None
 
     if not policy_path.is_file():
         print(f"[ERROR] Policy file not found: {policy_path}")
@@ -227,9 +410,24 @@ def main():
         print(f"[ERROR] MuJoCo model file not found: {model_path}")
         print("[INFO] Run generate_real_lite_mjcf.py first.")
         sys.exit(1)
+    if save_video_path is not None and args.fps <= 0.0:
+        print(f"[ERROR] FPS must be positive, got {args.fps}.")
+        sys.exit(1)
+    if save_video_path is not None and (args.width <= 0 or args.height <= 0):
+        print(f"[ERROR] Video size must be positive, got width={args.width}, height={args.height}.")
+        sys.exit(1)
 
-    cfg = build_cfg(args.task, args.duration)
-    runner = RealLiteMujocoRunner(cfg=cfg, policy_path=policy_path, model_path=model_path)
+    cfg = build_cfg(args.task, args.duration, enable_keyboard_commands=save_video_path is None)
+    runner = RealLiteMujocoRunner(
+        cfg=cfg,
+        policy_path=policy_path,
+        model_path=model_path,
+        save_video=save_video_path,
+        video_fps=args.fps,
+        width=args.width,
+        height=args.height,
+        camera=args.camera,
+    )
     runner.run()
 
 

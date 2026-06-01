@@ -121,6 +121,12 @@ python sim2sim_real_lite.py --task walk_real_lite --policy <policy.pt>
 python sim2sim_real_lite.py --task run_real_lite --policy <policy.pt>
 ```
 
+On headless servers, export an offscreen rollout video instead of opening the interactive viewer:
+
+```bash
+python sim2sim_real_lite.py --task walk_real_lite --policy <policy.pt> --save_video logs/walk_real_lite/rollout.mp4
+```
+
 ## Notes
 
 - This repository currently covers training, export, motion visualization, and MuJoCo sim2sim validation.
