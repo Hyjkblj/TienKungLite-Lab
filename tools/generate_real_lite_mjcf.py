@@ -1,4 +1,6 @@
 import os
+import shutil
+import struct
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
@@ -6,6 +8,7 @@ import xml.etree.ElementTree as ET
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = ROOT / "mjcf"
 OUTPUT_PATH = OUTPUT_DIR / "real_lite.xml"
+GENERATED_MESH_DIR = OUTPUT_DIR / "_mesh_cache"
 ASSET_ROOT_ENV_VAR = "TIENKUNG_LITE_ASSET_ROOT"
 ASSET_ROOT_DIRNAME = "x_humanoid_0430_newfeet_newbody_publish"
 DEFAULT_REAL_LITE_ASSET_ROOT = ROOT.parent / "lite_urdf_publish" / ASSET_ROOT_DIRNAME
@@ -70,8 +73,79 @@ MESH_DIR = ASSET_ROOT / "meshes"
 
 
 def _meshdir_for_xml() -> str:
-    relative_mesh_dir = os.path.relpath(MESH_DIR, OUTPUT_DIR)
+    relative_mesh_dir = os.path.relpath(GENERATED_MESH_DIR, OUTPUT_DIR)
     return Path(relative_mesh_dir).as_posix().rstrip("/") + "/"
+
+
+def _is_ascii_stl(mesh_path: Path) -> bool:
+    try:
+        header = mesh_path.read_bytes()[:4096]
+    except OSError:
+        return False
+    if not header:
+        return False
+    try:
+        header_text = header.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return "facet normal" in header_text and "vertex" in header_text
+
+
+def _parse_ascii_stl(mesh_path: Path) -> list[tuple[tuple[float, float, float], list[tuple[float, float, float]]]]:
+    triangles: list[tuple[tuple[float, float, float], list[tuple[float, float, float]]]] = []
+    current_normal: tuple[float, float, float] | None = None
+    current_vertices: list[tuple[float, float, float]] = []
+
+    with mesh_path.open("r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+            tokens = line.split()
+            if tokens[0] == "facet" and len(tokens) >= 5 and tokens[1] == "normal":
+                current_normal = (float(tokens[2]), float(tokens[3]), float(tokens[4]))
+                current_vertices = []
+            elif tokens[0] == "vertex" and len(tokens) >= 4:
+                current_vertices.append((float(tokens[1]), float(tokens[2]), float(tokens[3])))
+            elif tokens[0] == "endfacet":
+                if current_normal is None or len(current_vertices) != 3:
+                    raise ValueError(f"Malformed ASCII STL facet in {mesh_path}")
+                triangles.append((current_normal, current_vertices.copy()))
+                current_normal = None
+                current_vertices = []
+
+    if not triangles:
+        raise ValueError(f"No triangles found in ASCII STL file: {mesh_path}")
+    return triangles
+
+
+def _write_binary_stl(
+    output_path: Path,
+    triangles: list[tuple[tuple[float, float, float], list[tuple[float, float, float]]]],
+) -> None:
+    header = b"TienKungLiteLab generated binary STL".ljust(80, b"\0")
+    with output_path.open("wb") as handle:
+        handle.write(header)
+        handle.write(struct.pack("<I", len(triangles)))
+        for normal, vertices in triangles:
+            packed = list(normal)
+            for vertex in vertices:
+                packed.extend(vertex)
+            handle.write(struct.pack("<12f", *packed))
+            handle.write(struct.pack("<H", 0))
+
+
+def _prepare_mujoco_mesh_cache() -> None:
+    GENERATED_MESH_DIR.mkdir(parents=True, exist_ok=True)
+    for mesh_path in MESH_DIR.iterdir():
+        if not mesh_path.is_file():
+            continue
+        output_path = GENERATED_MESH_DIR / mesh_path.name
+        if mesh_path.suffix.lower() == ".stl" and _is_ascii_stl(mesh_path):
+            triangles = _parse_ascii_stl(mesh_path)
+            _write_binary_stl(output_path, triangles)
+        else:
+            shutil.copy2(mesh_path, output_path)
 
 # MuJoCo fullinertia order is:
 #   Ixx Iyy Izz Ixy Ixz Iyz
@@ -418,6 +492,7 @@ def _validate_generated_mjcf():
 
 def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    _prepare_mujoco_mesh_cache()
     OUTPUT_PATH.write_text(MJCF_TEXT, encoding="utf-8")
     _validate_generated_mjcf()
     print(f"[INFO] Wrote: {OUTPUT_PATH}")
