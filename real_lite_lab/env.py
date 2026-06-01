@@ -47,6 +47,10 @@ from .walk_cfg import RealLiteWalkEnvCfg
 PIPELINE_DIR = Path(__file__).resolve().parents[1]
 
 
+def _print_init(message: str) -> None:
+    print(f"[INIT] {message}", flush=True)
+
+
 def _build_actor_obs_slices(num_actions: int) -> dict[str, slice]:
     offset = 0
     slices = {}
@@ -101,9 +105,12 @@ class RealLiteEnv(VecEnv):
         self.sim = SimulationContext(sim_cfg)
 
         try:
+            _print_init("Building scene configuration.")
             scene_cfg = SceneCfg(config=cfg.scene, physics_dt=self.physics_dt, step_dt=self.step_dt)
             self.scene = InteractiveScene(scene_cfg)
+            _print_init("Scene created; resetting simulation context.")
             self.sim.reset()
+            _print_init("Simulation context reset completed.")
 
             self.robot: Articulation = self.scene["robot"]
             self.contact_sensor: ContactSensor = self.scene.sensors["contact_sensor"]
@@ -125,22 +132,34 @@ class RealLiteEnv(VecEnv):
                 debug_vis=self.cfg.commands.debug_vis,
                 ranges=self.cfg.commands.ranges,
             )
+            _print_init("Creating command generator.")
             self.command_generator = UniformVelocityCommand(cfg=command_cfg, env=self)
+            _print_init("Creating reward manager.")
             self.reward_manager = RewardManager(self.cfg.reward, self)
 
+            _print_init("Initializing environment buffers.")
             self.init_buffers()
 
             env_ids = torch.arange(self.num_envs, device=self.device)
+            _print_init("Creating event manager.")
             self.event_manager = EventManager(self.cfg.domain_rand.events, self)
+            _print_init("Event manager created.")
             if "startup" in self.event_manager.available_modes:
+                _print_init("Applying startup events.")
                 self.event_manager.apply(mode="startup")
+                _print_init("Startup events applied.")
+            _print_init("Resetting all environments.")
             self.reset(env_ids)
+            _print_init("Environment reset completed.")
 
+            _print_init("Creating AMP display loader.")
             self.amp_loader_display = AMPLoaderDisplay(
                 motion_files=self.cfg.amp_motion_files_display, device=self.device, time_between_frames=self.physics_dt
             )
             self.motion_len = self.amp_loader_display.trajectory_num_frames[0]
+            _print_init("AMP display loader ready.")
         except Exception:
+            _print_init("Environment initialization raised; entering cleanup.")
             self.close()
             raise
 
