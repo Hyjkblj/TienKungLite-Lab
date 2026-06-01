@@ -44,6 +44,7 @@ from real_lite_lab.constants import (
     TASK_NAMES,
     TASK_PRESETS,
 )
+from real_lite_lab.mjcf_mesh_fallback import build_mesh_safe_model
 
 
 MJCF_PATH = MJCF_DIR / "real_lite.xml"
@@ -175,7 +176,7 @@ class RealLiteMujocoRunner:
         camera: str | None = None,
     ):
         self.cfg = cfg
-        self.model = mujoco.MjModel.from_xml_path(str(model_path))
+        self.model = self._load_model_with_mesh_fallback(model_path)
         self.model.opt.timestep = self.cfg.sim.dt
         self.policy = torch.jit.load(str(policy_path))
         self.data = mujoco.MjData(self.model)
@@ -202,6 +203,26 @@ class RealLiteMujocoRunner:
             self.video_sink = _create_video_sink(self.save_video, fps=video_fps, width=width, height=height)
 
         self.init_variables()
+
+    def _load_model_with_mesh_fallback(self, model_path: Path) -> mujoco.MjModel:
+        try:
+            return mujoco.MjModel.from_xml_path(str(model_path))
+        except ValueError as exc:
+            error_text = str(exc)
+            if "decoder failed for mesh file" not in error_text:
+                raise
+
+            fallback_result = build_mesh_safe_model(model_path)
+            if fallback_result is None:
+                raise
+
+            stripped_meshes = ", ".join(fallback_result.stripped_mesh_names)
+            print(
+                "[WARN] MuJoCo could not load one or more visual meshes. "
+                f"Retrying with incompatible meshes removed: {stripped_meshes}"
+            )
+            print(f"[WARN] Using fallback model: {fallback_result.model_path}")
+            return mujoco.MjModel.from_xml_path(str(fallback_result.model_path))
 
     def init_variables(self):
         self.dt = self.cfg.sim.decimation * self.cfg.sim.dt
