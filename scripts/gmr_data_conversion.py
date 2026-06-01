@@ -58,6 +58,30 @@ def quat_wxyz_to_rotvec(quat: np.ndarray) -> np.ndarray:
     return Rotation.from_quat(quat_xyzw).as_rotvec()
 
 
+def _normalize_initial_yaw(root_pos: np.ndarray, root_rot_wxyz: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
+    root_pos = np.asarray(root_pos, dtype=np.float64)
+    root_rot_wxyz = np.asarray(root_rot_wxyz, dtype=np.float64)
+
+    if root_pos.shape[0] == 0:
+        return root_pos.copy(), root_rot_wxyz.copy(), 0.0
+
+    rotations = Rotation.from_quat(root_rot_wxyz[:, [1, 2, 3, 0]])
+    forward_world = rotations[0].apply(np.array([1.0, 0.0, 0.0], dtype=np.float64))
+    forward_xy = forward_world[:2]
+    forward_xy_norm = np.linalg.norm(forward_xy)
+    if forward_xy_norm < 1e-8:
+        return root_pos.copy(), root_rot_wxyz.copy(), 0.0
+
+    initial_yaw = float(np.arctan2(forward_xy[1], forward_xy[0]))
+    yaw_correction = Rotation.from_euler("z", -initial_yaw, degrees=False)
+
+    anchor = root_pos[0].copy()
+    normalized_root_pos = anchor + yaw_correction.apply(root_pos - anchor)
+    normalized_rotations = yaw_correction * rotations
+    normalized_root_rot_wxyz = normalized_rotations.as_quat()[:, [3, 0, 1, 2]]
+    return normalized_root_pos, normalized_root_rot_wxyz, initial_yaw
+
+
 def _write_visualization_motion(output_path: Path, frames: np.ndarray, fps: float) -> None:
     payload = {
         "FrameType": "visualization",
@@ -71,7 +95,7 @@ def _write_visualization_motion(output_path: Path, frames: np.ndarray, fps: floa
     output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
-def convert_pkl_to_custom(input_pkl, output_txt, fps):
+def convert_pkl_to_custom(input_pkl, output_txt, fps, normalize_initial_yaw=True):
     dt = 1.0 / fps
 
     motion_data = _load_motion_data(input_pkl)
@@ -79,6 +103,10 @@ def convert_pkl_to_custom(input_pkl, output_txt, fps):
     root_pos = np.asarray(motion_data["root_pos"], dtype=np.float64)
     root_rot = np.asarray(motion_data["root_rot"], dtype=np.float64)[:, [3, 0, 1, 2]]  # xyzw -> wxyz
     dof_pos = np.asarray(motion_data["dof_pos"], dtype=np.float64)
+
+    applied_initial_yaw = 0.0
+    if normalize_initial_yaw:
+        root_pos, root_rot, applied_initial_yaw = _normalize_initial_yaw(root_pos, root_rot)
 
     root_lin_vel = (root_pos[1:] - root_pos[:-1]) / dt
     q1_conj = quat_conjugate_wxyz(root_rot[:-1])
@@ -104,6 +132,8 @@ def convert_pkl_to_custom(input_pkl, output_txt, fps):
     output_path = Path(output_txt)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     _write_visualization_motion(output_path, data_output, fps)
+    if normalize_initial_yaw:
+        print(f"Normalized initial yaw by {-np.degrees(applied_initial_yaw):.3f} degrees.")
     print(f"Successfully converted {input_pkl} to {output_txt}")
 
 
@@ -112,6 +142,16 @@ if __name__ == "__main__":
     parser.add_argument("--input_pkl", type=str, required=True)
     parser.add_argument("--output_txt", type=str, required=True)
     parser.add_argument("--fps", type=float, default=30.0)
+    parser.add_argument(
+        "--disable_initial_yaw_normalization",
+        action="store_true",
+        help="Keep the original world heading from the retargeted motion instead of aligning the first frame to +x.",
+    )
     args = parser.parse_args()
 
-    convert_pkl_to_custom(args.input_pkl, args.output_txt, args.fps)
+    convert_pkl_to_custom(
+        args.input_pkl,
+        args.output_txt,
+        args.fps,
+        normalize_initial_yaw=not args.disable_initial_yaw_normalization,
+    )
