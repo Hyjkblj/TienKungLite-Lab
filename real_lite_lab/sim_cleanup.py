@@ -14,20 +14,7 @@ def close_simulation_context(sim: Any) -> None:
         _print_shutdown("Simulation context cleanup skipped: sim is None.")
         return
 
-    has_gui = getattr(sim, "has_gui", None)
-    stop = getattr(sim, "stop", None)
-    if callable(stop):
-        _print_shutdown("Inspecting SimulationContext.has_gui() before stop().")
-        try:
-            if not callable(has_gui) or not has_gui():
-                _print_shutdown("Calling SimulationContext.stop()")
-                stop()
-                _print_shutdown("SimulationContext.stop() completed.")
-            else:
-                _print_shutdown("Skipping SimulationContext.stop() because GUI is active.")
-        except Exception:
-            _print_shutdown("SimulationContext.stop() raised and was ignored.")
-            pass
+    _print_shutdown("Skipping SimulationContext.stop() to avoid shutdown deadlock.")
 
     for method_name in ("clear_all_callbacks", "clear_instance"):
         method = getattr(sim, method_name, None)

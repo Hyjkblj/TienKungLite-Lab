@@ -22,8 +22,7 @@ close_simulation_context = load_close_simulation_context()
 
 
 class DummySim:
-    def __init__(self, has_gui: bool = False, fail_on: tuple[str, ...] = ()) -> None:
-        self._has_gui = has_gui
+    def __init__(self, fail_on: tuple[str, ...] = ()) -> None:
         self.fail_on = set(fail_on)
         self.calls: list[str] = []
 
@@ -31,10 +30,6 @@ class DummySim:
         self.calls.append(name)
         if name in self.fail_on:
             raise RuntimeError(f"{name} failed")
-
-    def has_gui(self) -> bool:
-        self.calls.append("has_gui")
-        return self._has_gui
 
     def stop(self) -> None:
         self._record("stop")
@@ -47,26 +42,19 @@ class DummySim:
 
 
 class SimCleanupTests(unittest.TestCase):
-    def test_headless_cleanup_stops_and_clears(self) -> None:
-        sim = DummySim(has_gui=False)
+    def test_cleanup_clears_callbacks_without_stopping(self) -> None:
+        sim = DummySim()
 
         close_simulation_context(sim)
 
-        self.assertEqual(sim.calls, ["has_gui", "stop", "clear_all_callbacks", "clear_instance"])
-
-    def test_gui_cleanup_skips_stop(self) -> None:
-        sim = DummySim(has_gui=True)
-
-        close_simulation_context(sim)
-
-        self.assertEqual(sim.calls, ["has_gui", "clear_all_callbacks", "clear_instance"])
+        self.assertEqual(sim.calls, ["clear_all_callbacks", "clear_instance"])
 
     def test_cleanup_continues_when_hooks_fail(self) -> None:
-        sim = DummySim(has_gui=False, fail_on=("stop", "clear_all_callbacks", "clear_instance"))
+        sim = DummySim(fail_on=("clear_all_callbacks", "clear_instance"))
 
         close_simulation_context(sim)
 
-        self.assertEqual(sim.calls, ["has_gui", "stop", "clear_all_callbacks", "clear_instance"])
+        self.assertEqual(sim.calls, ["clear_all_callbacks", "clear_instance"])
 
 
 if __name__ == "__main__":
