@@ -41,6 +41,7 @@ from .constants import (
 from .runtime_paths import ensure_writable_isaaclab_tmp
 from .run_cfg import RealLiteRunEnvCfg
 from .scene import SceneCfg
+from .sim_cleanup import close_simulation_context
 from .walk_cfg import RealLiteWalkEnvCfg
 
 PIPELINE_DIR = Path(__file__).resolve().parents[1]
@@ -75,6 +76,7 @@ def _build_actor_obs_slices(num_actions: int) -> dict[str, slice]:
 
 class RealLiteEnv(VecEnv):
     def __init__(self, cfg: RealLiteRunEnvCfg | RealLiteWalkEnvCfg, headless):
+        self._closed = False
         self.cfg = cfg
         self.headless = headless
         self.device = self.cfg.device
@@ -98,45 +100,49 @@ class RealLiteEnv(VecEnv):
         ensure_writable_isaaclab_tmp(PIPELINE_DIR / "logs" / "_isaaclab_tmp")
         self.sim = SimulationContext(sim_cfg)
 
-        scene_cfg = SceneCfg(config=cfg.scene, physics_dt=self.physics_dt, step_dt=self.step_dt)
-        self.scene = InteractiveScene(scene_cfg)
-        self.sim.reset()
+        try:
+            scene_cfg = SceneCfg(config=cfg.scene, physics_dt=self.physics_dt, step_dt=self.step_dt)
+            self.scene = InteractiveScene(scene_cfg)
+            self.sim.reset()
 
-        self.robot: Articulation = self.scene["robot"]
-        self.contact_sensor: ContactSensor = self.scene.sensors["contact_sensor"]
+            self.robot: Articulation = self.scene["robot"]
+            self.contact_sensor: ContactSensor = self.scene.sensors["contact_sensor"]
 
-        if self.cfg.scene.height_scanner.enable_height_scan:
-            self.height_scanner: RayCaster = self.scene.sensors["height_scanner"]
-        if self.cfg.scene.lidar.enable_lidar:
-            self.lidar: RayCaster = self.scene.sensors["lidar"]
-        if self.cfg.scene.depth_camera.enable_depth_camera:
-            self.depth_camera: TiledCamera = self.scene.sensors["depth_camera"]
+            if self.cfg.scene.height_scanner.enable_height_scan:
+                self.height_scanner: RayCaster = self.scene.sensors["height_scanner"]
+            if self.cfg.scene.lidar.enable_lidar:
+                self.lidar: RayCaster = self.scene.sensors["lidar"]
+            if self.cfg.scene.depth_camera.enable_depth_camera:
+                self.depth_camera: TiledCamera = self.scene.sensors["depth_camera"]
 
-        command_cfg = UniformVelocityCommandCfg(
-            asset_name="robot",
-            resampling_time_range=self.cfg.commands.resampling_time_range,
-            rel_standing_envs=self.cfg.commands.rel_standing_envs,
-            rel_heading_envs=self.cfg.commands.rel_heading_envs,
-            heading_command=self.cfg.commands.heading_command,
-            heading_control_stiffness=self.cfg.commands.heading_control_stiffness,
-            debug_vis=self.cfg.commands.debug_vis,
-            ranges=self.cfg.commands.ranges,
-        )
-        self.command_generator = UniformVelocityCommand(cfg=command_cfg, env=self)
-        self.reward_manager = RewardManager(self.cfg.reward, self)
+            command_cfg = UniformVelocityCommandCfg(
+                asset_name="robot",
+                resampling_time_range=self.cfg.commands.resampling_time_range,
+                rel_standing_envs=self.cfg.commands.rel_standing_envs,
+                rel_heading_envs=self.cfg.commands.rel_heading_envs,
+                heading_command=self.cfg.commands.heading_command,
+                heading_control_stiffness=self.cfg.commands.heading_control_stiffness,
+                debug_vis=self.cfg.commands.debug_vis,
+                ranges=self.cfg.commands.ranges,
+            )
+            self.command_generator = UniformVelocityCommand(cfg=command_cfg, env=self)
+            self.reward_manager = RewardManager(self.cfg.reward, self)
 
-        self.init_buffers()
+            self.init_buffers()
 
-        env_ids = torch.arange(self.num_envs, device=self.device)
-        self.event_manager = EventManager(self.cfg.domain_rand.events, self)
-        if "startup" in self.event_manager.available_modes:
-            self.event_manager.apply(mode="startup")
-        self.reset(env_ids)
+            env_ids = torch.arange(self.num_envs, device=self.device)
+            self.event_manager = EventManager(self.cfg.domain_rand.events, self)
+            if "startup" in self.event_manager.available_modes:
+                self.event_manager.apply(mode="startup")
+            self.reset(env_ids)
 
-        self.amp_loader_display = AMPLoaderDisplay(
-            motion_files=self.cfg.amp_motion_files_display, device=self.device, time_between_frames=self.physics_dt
-        )
-        self.motion_len = self.amp_loader_display.trajectory_num_frames[0]
+            self.amp_loader_display = AMPLoaderDisplay(
+                motion_files=self.cfg.amp_motion_files_display, device=self.device, time_between_frames=self.physics_dt
+            )
+            self.motion_len = self.amp_loader_display.trajectory_num_frames[0]
+        except Exception:
+            self.close()
+            raise
 
     def init_buffers(self):
         self.extras = {}
@@ -191,7 +197,10 @@ class RealLiteEnv(VecEnv):
             raise ValueError("Resolved policy joint count does not match policy joint name count.")
         self.default_joint_pos_policy = self.robot.data.default_joint_pos[:, self.policy_joint_ids]
         self.default_joint_vel_policy = self.robot.data.default_joint_vel[:, self.policy_joint_ids]
-        default_feet_y = self.robot.data.body_pos_w[0, self.feet_body_ids[0], 1] - self.robot.data.body_pos_w[0, self.feet_body_ids[1], 1]
+        default_feet_y = (
+            self.robot.data.body_pos_w[0, self.feet_body_ids[0], 1]
+            - self.robot.data.body_pos_w[0, self.feet_body_ids[1], 1]
+        )
         self.default_feet_y_dist = torch.abs(default_feet_y).item()
         self.actor_obs_slices = _build_actor_obs_slices(self.num_actions)
 
@@ -374,7 +383,9 @@ class RealLiteEnv(VecEnv):
             ],
             dim=-1,
         )
-        current_critic_obs = torch.cat([current_actor_obs, root_lin_vel * self.obs_scales.lin_vel, feet_contact], dim=-1)
+        current_critic_obs = torch.cat(
+            [current_actor_obs, root_lin_vel * self.obs_scales.lin_vel, feet_contact], dim=-1
+        )
         if current_actor_obs.shape[1] != OBS_PER_STEP_DIM:
             raise ValueError(
                 f"Actor observation size mismatch: expected {OBS_PER_STEP_DIM}, got {current_actor_obs.shape[1]}."
@@ -517,9 +528,7 @@ class RealLiteEnv(VecEnv):
             )
             noise_vec[self.actor_obs_slices["command"]] = 0.0
             noise_vec[self.actor_obs_slices["joint_pos"]] = noise_scales.joint_pos * self.obs_scales.joint_pos
-            noise_vec[self.actor_obs_slices["joint_vel"]] = (
-                noise_scales.joint_vel * self.obs_scales.joint_vel
-            )
+            noise_vec[self.actor_obs_slices["joint_vel"]] = noise_scales.joint_vel * self.obs_scales.joint_vel
             noise_vec[self.actor_obs_slices["actions"]] = 0.0
             noise_vec[self.actor_obs_slices["sin_phase"]] = 0.0
             noise_vec[self.actor_obs_slices["cos_phase"]] = 0.0
@@ -575,3 +584,26 @@ class RealLiteEnv(VecEnv):
         t = self.episode_length_buf * self.step_dt / self.gait_cycle
         self.gait_phase[:, 0] = (t + self.phase_offset[:, 0]) % 1.0
         self.gait_phase[:, 1] = (t + self.phase_offset[:, 1]) % 1.0
+
+    def close(self) -> None:
+        if self._closed:
+            return
+
+        self._closed = True
+        close_simulation_context(getattr(self, "sim", None))
+
+        for attr_name in (
+            "amp_loader_display",
+            "command_generator",
+            "reward_manager",
+            "event_manager",
+            "depth_camera",
+            "lidar",
+            "height_scanner",
+            "contact_sensor",
+            "robot",
+            "scene",
+            "sim",
+        ):
+            if hasattr(self, attr_name):
+                setattr(self, attr_name, None)
