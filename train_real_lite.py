@@ -29,7 +29,7 @@ simulation_app = app_launcher.app
 from rsl_rl.runners import AmpOnPolicyRunner, OnPolicyRunner
 
 from real_lite_lab import register_tasks, task_registry
-from real_lite_lab.cli_args import update_rsl_rl_cfg
+from real_lite_lab.cli_args import apply_headless_env_cfg_overrides, update_rsl_rl_cfg
 from real_lite_lab.isaaclab_compat import dump_yaml, get_checkpoint_path
 
 _RUNNERS = {"OnPolicyRunner": OnPolicyRunner, "AmpOnPolicyRunner": AmpOnPolicyRunner}
@@ -49,6 +49,7 @@ def main():
         env_cfg.scene.num_envs = args_cli.num_envs
 
     agent_cfg = update_rsl_rl_cfg(agent_cfg, args_cli)
+    env_cfg = apply_headless_env_cfg_overrides(env_cfg, args_cli.headless)
     env_cfg.scene.seed = agent_cfg.seed
 
     env = None

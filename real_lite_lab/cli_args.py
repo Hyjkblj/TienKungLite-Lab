@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import random
+from typing import Any
 
 
 def add_rsl_rl_args(parser: argparse.ArgumentParser):
@@ -46,3 +47,16 @@ def update_rsl_rl_cfg(agent_cfg, args_cli: argparse.Namespace):
         agent_cfg.wandb_project = args_cli.log_project_name
         agent_cfg.neptune_project = args_cli.log_project_name
     return agent_cfg
+
+
+def apply_headless_env_cfg_overrides(env_cfg: Any, headless: bool) -> Any:
+    """Disable optional visual debug features that can block headless training."""
+
+    if not headless:
+        return env_cfg
+
+    commands_cfg = getattr(env_cfg, "commands", None)
+    if getattr(commands_cfg, "debug_vis", False):
+        commands_cfg.debug_vis = False
+
+    return env_cfg
