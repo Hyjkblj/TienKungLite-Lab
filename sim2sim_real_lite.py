@@ -44,6 +44,7 @@ from real_lite_lab.constants import (
     TASK_NAMES,
     TASK_PRESETS,
 )
+from real_lite_lab.joint_order import build_target_order_indices
 from real_lite_lab.mjcf_mesh_fallback import build_mesh_safe_model, ensure_offscreen_framebuffer_size
 
 
@@ -54,6 +55,17 @@ MUJOCO_SENSOR_ORDER = POLICY_JOINT_NAMES
 assert ISAAC_POLICY_ORDER == MUJOCO_SENSOR_ORDER, (
     f"Joint order mismatch: Isaac and MuJoCo must agree, got {ISAAC_POLICY_ORDER} vs {MUJOCO_SENSOR_ORDER}"
 )
+
+
+def _actuator_joint_names(model: mujoco.MjModel) -> list[str]:
+    joint_names: list[str] = []
+    for actuator_id in range(model.nu):
+        joint_id = int(model.actuator_trnid[actuator_id, 0])
+        joint_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
+        if joint_name is None:
+            raise ValueError(f"Unable to resolve joint name for actuator {actuator_id}.")
+        joint_names.append(joint_name)
+    return joint_names
 
 
 class RealLiteSim2SimCfg:
@@ -249,9 +261,14 @@ class RealLiteMujocoRunner:
             (self.cfg.sim.num_obs_per_step * self.cfg.sim.actor_obs_history_length,), dtype=np.float32
         )
         self.sensor_joint_name_to_idx = {name: idx for idx, name in enumerate(MUJOCO_SENSOR_ORDER)}
-        self.policy_joint_name_to_idx = {name: idx for idx, name in enumerate(ISAAC_POLICY_ORDER)}
+        self.actuator_joint_names = _actuator_joint_names(self.model)
         self.mujoco_to_isaac_idx = [self.sensor_joint_name_to_idx[name] for name in ISAAC_POLICY_ORDER]
-        self.isaac_to_mujoco_idx = [self.policy_joint_name_to_idx[name] for name in MUJOCO_SENSOR_ORDER]
+
+        if len(self.actuator_joint_names) != self.cfg.sim.num_action:
+            raise ValueError(
+                f"Actuator count mismatch: expected {self.cfg.sim.num_action}, got {len(self.actuator_joint_names)}."
+            )
+        self.isaac_to_mujoco_actuator_idx = build_target_order_indices(ISAAC_POLICY_ORDER, self.actuator_joint_names)
 
     def quat_rotate_inverse(self, q: np.ndarray, v: np.ndarray) -> np.ndarray:
         q_w = q[-1]
@@ -296,8 +313,10 @@ class RealLiteMujocoRunner:
         return np.clip(self.obs_history, -self.cfg.sim.clip_observations, self.cfg.sim.clip_observations)
 
     def position_control(self) -> np.ndarray:
-        actions_scaled = self.action * self.cfg.sim.action_scale
-        return actions_scaled[self.isaac_to_mujoco_idx] + self.default_dof_pos
+        policy_targets = self.action * self.cfg.sim.action_scale + self.default_dof_pos
+        actuator_targets = np.empty_like(policy_targets)
+        actuator_targets[self.isaac_to_mujoco_actuator_idx] = policy_targets
+        return actuator_targets
 
     def adjust_command_vel(self, idx: int, increment: float):
         self.command_vel[idx] += increment
