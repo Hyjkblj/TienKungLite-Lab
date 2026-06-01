@@ -7,6 +7,26 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 
+class _NumpyCompatUnpickler(pickle.Unpickler):
+    """Load motion PKLs produced with NumPy module path variants."""
+
+    def find_class(self, module, name):
+        if module.startswith("numpy._core"):
+            module = module.replace("numpy._core", "numpy.core", 1)
+        return super().find_class(module, name)
+
+
+def _load_motion_data(input_pkl: str):
+    with open(input_pkl, "rb") as f:
+        try:
+            return pickle.load(f)
+        except ModuleNotFoundError as exc:
+            if exc.name != "numpy._core":
+                raise
+            f.seek(0)
+            return _NumpyCompatUnpickler(f).load()
+
+
 def quat_conjugate_wxyz(quat: np.ndarray) -> np.ndarray:
     quat = np.asarray(quat, dtype=np.float64)
     conjugate = quat.copy()
@@ -54,8 +74,7 @@ def _write_visualization_motion(output_path: Path, frames: np.ndarray, fps: floa
 def convert_pkl_to_custom(input_pkl, output_txt, fps):
     dt = 1.0 / fps
 
-    with open(input_pkl, "rb") as f:
-        motion_data = pickle.load(f)
+    motion_data = _load_motion_data(input_pkl)
 
     root_pos = np.asarray(motion_data["root_pos"], dtype=np.float64)
     root_rot = np.asarray(motion_data["root_rot"], dtype=np.float64)[:, [3, 0, 1, 2]]  # xyzw -> wxyz

@@ -6,6 +6,7 @@ import pickle
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
@@ -24,6 +25,28 @@ def load_conversion_module():
 
 
 class GmrDataConversionTests(unittest.TestCase):
+    def test_load_motion_data_falls_back_for_numpy_core_pickles(self) -> None:
+        module = load_conversion_module()
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            input_pkl = tmp_path / "motion.pkl"
+            payload = {"value": np.array([1.0, 2.0], dtype=np.float64)}
+            with input_pkl.open("wb") as f:
+                pickle.dump(payload, f)
+
+            fallback_error = ModuleNotFoundError("No module named 'numpy._core'")
+            fallback_error.name = "numpy._core"
+
+            with mock.patch.object(
+                module.pickle,
+                "load",
+                side_effect=fallback_error,
+            ):
+                result = module._load_motion_data(str(input_pkl))
+
+        np.testing.assert_allclose(result["value"], payload["value"])
+
     def test_convert_pkl_to_custom_writes_visualization_payload(self) -> None:
         module = load_conversion_module()
 
