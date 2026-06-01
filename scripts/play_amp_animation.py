@@ -1,10 +1,18 @@
 import argparse
+import json
+import sys
+import traceback
+from pathlib import Path
 
+import numpy as np
 from isaaclab.app import AppLauncher
+
+PIPELINE_DIR = Path(__file__).resolve().parents[1]
+if str(PIPELINE_DIR) not in sys.path:
+    sys.path.insert(0, str(PIPELINE_DIR))
 
 # local imports
 import real_lite_lab.cli_args as cli_args  # isort: skip
-import numpy as np
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Visualize AMP motion and export expert data.")
@@ -33,6 +41,26 @@ from real_lite_lab.cli_args import update_rsl_rl_cfg
 register_tasks()
 
 
+def _print_shutdown(message: str) -> None:
+    print(f"[SHUTDOWN] {message}", flush=True)
+
+
+def _write_amp_expert_motion(save_path: str, frames: list[np.ndarray], fps: float) -> None:
+    output_path = Path(save_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "FrameType": "amp_expert",
+        "LoopMode": "Wrap",
+        "FrameDuration": round(1.0 / fps, 3),
+        "EnableCycleOffsetPosition": True,
+        "EnableCycleOffsetRotation": True,
+        "MotionWeight": 0.5,
+        "Frames": np.stack(frames, axis=0).tolist(),
+    }
+    output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    print(f"Successfully saved AMP expert data to {save_path}")
+
+
 def play_amp_animation():
     env_class_name = args_cli.task
     env_cfg, agent_cfg = task_registry.get_cfgs(env_class_name)
@@ -52,52 +80,41 @@ def play_amp_animation():
     env_cfg.scene.seed = agent_cfg.seed
 
     env_class = task_registry.get_task_class(env_class_name)
-    env = env_class(env_cfg, args_cli.headless)
+    env = None
+    try:
+        env = env_class(env_cfg, args_cli.headless)
 
-    frame_cnt = 0
-    all_frames = []
-    while simulation_app.is_running():
-        while True:
-            time = (frame_cnt % (env.motion_len)) * (1.0 / args_cli.fps)
-            frame = env.visualize_motion(time)
-            if args_cli.save_path:
-                frame = frame.cpu().numpy().reshape(-1)
-                all_frames.append(frame)
-            frame_cnt += 1
-            if frame_cnt >= (env.motion_len - 1):
-                break
-        break
+        frame_cnt = 0
+        all_frames = []
+        while simulation_app.is_running():
+            while True:
+                time = (frame_cnt % env.motion_len) * (1.0 / args_cli.fps)
+                frame = env.visualize_motion(time)
+                if args_cli.save_path:
+                    all_frames.append(frame.cpu().numpy().reshape(-1))
+                frame_cnt += 1
+                if frame_cnt >= (env.motion_len - 1):
+                    break
+            break
 
-    if args_cli.save_path:
-        all_frames_np = np.stack(all_frames, axis=0)
-        np.savetxt(args_cli.save_path, all_frames_np, fmt="%f", delimiter=", ")
-
-        with open(args_cli.save_path, "r") as f:
-            frames_data = f.readlines()
-
-        frames_data_len = len(frames_data)
-        with open(args_cli.save_path, "w") as f:
-            f.write("{\n")
-            f.write('"FrameType": "amp_expert",\n')
-            f.write('"LoopMode": "Wrap",\n')
-            f.write(f'"FrameDuration": {1.0 / args_cli.fps:.3f},\n')
-            f.write('"EnableCycleOffsetPosition": true,\n')
-            f.write('"EnableCycleOffsetRotation": true,\n')
-            f.write('"MotionWeight": 0.5,\n\n')
-            f.write('"Frames":\n[\n')
-
-            for i, line in enumerate(frames_data):
-                line_start_str = "  ["
-                if i == frames_data_len - 1:
-                    f.write(line_start_str + line.rstrip() + "]\n")
-                else:
-                    f.write(line_start_str + line.rstrip() + "],\n")
-
-            f.write("]\n}")
-
-        print(f"Successfully saved AMP expert data to {args_cli.save_path}")
+        if args_cli.save_path:
+            _write_amp_expert_motion(args_cli.save_path, all_frames, args_cli.fps)
+    finally:
+        if env is not None:
+            _print_shutdown("Starting env.close()")
+            env.close()
+            _print_shutdown("Completed env.close()")
 
 
 if __name__ == "__main__":
-    play_amp_animation()
-    simulation_app.close()
+    exit_code = 0
+    try:
+        play_amp_animation()
+    except Exception:
+        exit_code = 1
+        traceback.print_exc()
+    finally:
+        _print_shutdown("Starting simulation_app.close()")
+        simulation_app.close()
+        _print_shutdown("Completed simulation_app.close()")
+    sys.exit(exit_code)
