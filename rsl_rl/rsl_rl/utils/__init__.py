@@ -18,6 +18,7 @@
 
 """Helper functions."""
 
+from .cleanup import close_writer
 from .motion_loader import AMPLoader
 from .motion_loader_for_display import AMPLoaderDisplay
 from .utils import (
@@ -32,4 +33,5 @@ from .utils import (
 __all__ = [
     "AMPLoader",
     "AMPLoaderDisplay",
+    "close_writer",
 ]

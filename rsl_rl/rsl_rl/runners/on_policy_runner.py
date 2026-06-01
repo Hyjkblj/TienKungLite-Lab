@@ -35,7 +35,7 @@ from rsl_rl.modules import (
     StudentTeacher,
     StudentTeacherRecurrent,
 )
-from rsl_rl.utils import store_code_state
+from rsl_rl.utils import close_writer, store_code_state
 
 
 class OnPolicyRunner:
@@ -433,31 +433,7 @@ class OnPolicyRunner:
             self.writer.save_model(path, self.current_learning_iteration)
 
     def close(self):
-        if self.writer is None:
-            return
-
-        flush_writer = getattr(self.writer, "flush", None)
-        if callable(flush_writer):
-            try:
-                flush_writer()
-            except Exception:
-                pass
-
-        close_writer = getattr(self.writer, "close", None)
-        if callable(close_writer):
-            try:
-                close_writer()
-            except Exception:
-                pass
-
-        stop_writer = getattr(self.writer, "stop", None)
-        if callable(stop_writer):
-            try:
-                stop_writer()
-            except Exception:
-                pass
-
-        self.writer = None
+        self.writer = close_writer(self.writer)
 
     def load(self, path: str, load_optimizer: bool = True):
         loaded_dict = torch.load(path, weights_only=False)
