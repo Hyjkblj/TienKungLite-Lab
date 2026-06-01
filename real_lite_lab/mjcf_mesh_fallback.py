@@ -15,6 +15,25 @@ class MeshFallbackResult:
     stripped_mesh_names: tuple[str, ...]
 
 
+def ensure_offscreen_framebuffer_size(model, width: int, height: int) -> tuple[int, int] | None:
+    visual = getattr(model, "vis", None)
+    global_visual = getattr(visual, "global_", None)
+    if global_visual is None:
+        return None
+
+    current_width = int(getattr(global_visual, "offwidth", 0))
+    current_height = int(getattr(global_visual, "offheight", 0))
+    target_width = max(current_width, int(width))
+    target_height = max(current_height, int(height))
+
+    if target_width == current_width and target_height == current_height:
+        return None
+
+    global_visual.offwidth = target_width
+    global_visual.offheight = target_height
+    return (target_width, target_height)
+
+
 def _binary_stl_triangle_count(stl_bytes: bytes) -> int | None:
     if len(stl_bytes) < 84:
         return None

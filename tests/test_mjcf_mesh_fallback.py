@@ -6,6 +6,7 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from types import SimpleNamespace
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -30,6 +31,18 @@ def _write_binary_stl(mesh_path: Path, triangle_count: int) -> None:
 
 
 class MjcfMeshFallbackTests(unittest.TestCase):
+    def test_ensure_offscreen_framebuffer_size_grows_only_when_needed(self) -> None:
+        module = load_mesh_fallback_module()
+        model = SimpleNamespace(vis=SimpleNamespace(global_=SimpleNamespace(offwidth=640, offheight=480)))
+
+        resized = module.ensure_offscreen_framebuffer_size(model, width=1280, height=720)
+        self.assertEqual(resized, (1280, 720))
+        self.assertEqual(model.vis.global_.offwidth, 1280)
+        self.assertEqual(model.vis.global_.offheight, 720)
+
+        unchanged = module.ensure_offscreen_framebuffer_size(model, width=640, height=480)
+        self.assertIsNone(unchanged)
+
     def test_binary_stl_triangle_count_rejects_mismatched_payload(self) -> None:
         module = load_mesh_fallback_module()
         invalid_binary = b"binary".ljust(80, b"\0") + (999).to_bytes(4, "little") + (b"\0" * 50)

@@ -44,7 +44,7 @@ from real_lite_lab.constants import (
     TASK_NAMES,
     TASK_PRESETS,
 )
-from real_lite_lab.mjcf_mesh_fallback import build_mesh_safe_model
+from real_lite_lab.mjcf_mesh_fallback import build_mesh_safe_model, ensure_offscreen_framebuffer_size
 
 
 MJCF_PATH = MJCF_DIR / "real_lite.xml"
@@ -174,6 +174,7 @@ class RealLiteMujocoRunner:
         width: int = 1280,
         height: int = 720,
         camera: str | None = None,
+        command_vel: tuple[float, float, float] = (0.0, 0.0, 0.0),
     ):
         self.cfg = cfg
         self.model = self._load_model_with_mesh_fallback(model_path)
@@ -184,6 +185,7 @@ class RealLiteMujocoRunner:
         self.save_video = save_video
         self.video_fps = video_fps
         self.camera = camera
+        self.initial_command_vel = np.array(command_vel, dtype=np.float64)
         self.frame_interval = 1.0 / video_fps if save_video is not None else None
         self.next_frame_time = 0.0
         self.viewer = None
@@ -199,6 +201,9 @@ class RealLiteMujocoRunner:
             self.viewer = mujoco_viewer.MujocoViewer(self.model, self.data)
             self.viewer._render_every_frame = False
         else:
+            framebuffer_size = ensure_offscreen_framebuffer_size(self.model, width=width, height=height)
+            if framebuffer_size is not None:
+                print(f"[INFO] Offscreen framebuffer resized to: {framebuffer_size[0]}x{framebuffer_size[1]}")
             self.renderer = mujoco.Renderer(self.model, height=height, width=width)
             self.video_sink = _create_video_sink(self.save_video, fps=video_fps, width=width, height=height)
 
@@ -239,7 +244,7 @@ class RealLiteMujocoRunner:
         self.gait_cycle = self.cfg.robot.gait_cycle
         self.phase_ratio = np.array([self.cfg.robot.gait_air_ratio_l, self.cfg.robot.gait_air_ratio_r])
         self.phase_offset = np.array([self.cfg.robot.gait_phase_offset_l, self.cfg.robot.gait_phase_offset_r])
-        self.command_vel = np.array([0.0, 0.0, 0.0])
+        self.command_vel = self.initial_command_vel.copy()
         self.obs_history = np.zeros(
             (self.cfg.sim.num_obs_per_step * self.cfg.sim.actor_obs_history_length,), dtype=np.float32
         )
@@ -418,6 +423,9 @@ def main():
     parser.add_argument("--width", type=int, default=1280, help="Video width when --save_video is set.")
     parser.add_argument("--height", type=int, default=720, help="Video height when --save_video is set.")
     parser.add_argument("--camera", default=None, help="Optional MuJoCo camera name for offscreen rendering.")
+    parser.add_argument("--command_vx", type=float, default=0.0, help="Initial commanded forward velocity.")
+    parser.add_argument("--command_vy", type=float, default=0.0, help="Initial commanded lateral velocity.")
+    parser.add_argument("--command_wz", type=float, default=0.0, help="Initial commanded yaw velocity.")
     args = parser.parse_args()
 
     policy_path = Path(args.policy).resolve()
@@ -439,6 +447,8 @@ def main():
         sys.exit(1)
 
     cfg = build_cfg(args.task, args.duration, enable_keyboard_commands=save_video_path is None)
+    command_vel = (args.command_vx, args.command_vy, args.command_wz)
+    print(f"[INFO] Initial command velocity: vx={command_vel[0]:.3f}, vy={command_vel[1]:.3f}, wz={command_vel[2]:.3f}")
     runner = RealLiteMujocoRunner(
         cfg=cfg,
         policy_path=policy_path,
@@ -448,6 +458,7 @@ def main():
         width=args.width,
         height=args.height,
         camera=args.camera,
+        command_vel=command_vel,
     )
     runner.run()
 
