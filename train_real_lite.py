@@ -5,11 +5,16 @@ from datetime import datetime
 from pathlib import Path
 
 import torch
+from debug_signals import install_stack_dump_signal
 from isaaclab.app import AppLauncher
 
 PIPELINE_DIR = Path(__file__).resolve().parent
 if str(PIPELINE_DIR) not in sys.path:
     sys.path.insert(0, str(PIPELINE_DIR))
+
+_stack_dump_signal = install_stack_dump_signal()
+if _stack_dump_signal is not None:
+    print(f"[INFO] Send SIGUSR1 to PID {os.getpid()} to dump Python stack traces.")
 
 import real_lite_lab.cli_args as cli_args
 from real_lite_lab.constants import TASK_NAMES
@@ -38,6 +43,20 @@ torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.deterministic = False
 torch.backends.cudnn.benchmark = False
+
+
+def _print_shutdown(message: str) -> None:
+    print(f"[SHUTDOWN] {message}", flush=True)
+
+
+def _run_shutdown_step(step_name: str, callback) -> None:
+    if not callable(callback):
+        _print_shutdown(f"Skipping {step_name}: not available.")
+        return
+
+    _print_shutdown(f"Starting {step_name}")
+    callback()
+    _print_shutdown(f"Completed {step_name}")
 
 
 def main():
@@ -80,19 +99,20 @@ def main():
         dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
         dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
         runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
+        _print_shutdown("runner.learn() returned.")
     finally:
         if runner is not None:
             close_runner = getattr(runner, "close", None)
-            if callable(close_runner):
-                close_runner()
+            _run_shutdown_step("runner.close()", close_runner)
         if env is not None:
             close_env = getattr(env, "close", None)
-            if callable(close_env):
-                close_env()
+            _run_shutdown_step("env.close()", close_env)
 
 
 if __name__ == "__main__":
     try:
         main()
     finally:
+        _print_shutdown("Starting simulation_app.close()")
         simulation_app.close()
+        _print_shutdown("Completed simulation_app.close()")
