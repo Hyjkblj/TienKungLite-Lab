@@ -1,6 +1,7 @@
 import argparse
 import os
 import sys
+import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -36,6 +37,7 @@ from rsl_rl.runners import AmpOnPolicyRunner, OnPolicyRunner
 from real_lite_lab import register_tasks, task_registry
 from real_lite_lab.cli_args import apply_headless_env_cfg_overrides, update_rsl_rl_cfg
 from real_lite_lab.isaaclab_compat import dump_yaml, get_checkpoint_path
+from real_lite_lab.motion_files import validate_motion_files
 
 _RUNNERS = {"OnPolicyRunner": OnPolicyRunner, "AmpOnPolicyRunner": AmpOnPolicyRunner}
 
@@ -70,6 +72,11 @@ def main():
     agent_cfg = update_rsl_rl_cfg(agent_cfg, args_cli)
     env_cfg = apply_headless_env_cfg_overrides(env_cfg, args_cli.headless)
     env_cfg.scene.seed = agent_cfg.seed
+    validate_motion_files(
+        task_name=args_cli.task,
+        display_motion_files=getattr(env_cfg, "amp_motion_files_display", None),
+        amp_motion_files=getattr(agent_cfg, "amp_motion_files", None),
+    )
 
     env = None
     runner = None
@@ -110,9 +117,14 @@ def main():
 
 
 if __name__ == "__main__":
+    exit_code = 0
     try:
         main()
+    except Exception:
+        exit_code = 1
+        traceback.print_exc()
     finally:
         _print_shutdown("Starting simulation_app.close()")
         simulation_app.close()
         _print_shutdown("Completed simulation_app.close()")
+    sys.exit(exit_code)
