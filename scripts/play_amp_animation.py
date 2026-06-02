@@ -35,7 +35,8 @@ if args_cli.task and "sensor" in args_cli.task:
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
-from real_lite_lab import register_tasks, task_registry
+from real_lite_lab import register_tasks
+from real_lite_lab.task_registry import task_registry
 from real_lite_lab.cli_args import update_rsl_rl_cfg
 
 register_tasks()

@@ -34,10 +34,11 @@ simulation_app = app_launcher.app
 
 from rsl_rl.runners import AmpOnPolicyRunner, OnPolicyRunner
 
-from real_lite_lab import register_tasks, task_registry
+from real_lite_lab import register_tasks
 from real_lite_lab.cli_args import apply_headless_env_cfg_overrides, update_rsl_rl_cfg
 from real_lite_lab.isaaclab_compat import dump_yaml, get_checkpoint_path
 from real_lite_lab.motion_files import validate_motion_files
+from real_lite_lab.task_registry import task_registry
 
 _RUNNERS = {"OnPolicyRunner": OnPolicyRunner, "AmpOnPolicyRunner": AmpOnPolicyRunner}
 
