@@ -60,7 +60,7 @@ from real_lite_lab.alignment_config import (
 from real_lite_lab.joint_order import build_target_order_indices
 from real_lite_lab.mjcf_mesh_fallback import build_mesh_safe_model, ensure_offscreen_framebuffer_size
 from real_lite_lab.mujoco_state_init import apply_default_joint_state, snap_root_height_to_ground
-from real_lite_lab.standing_pose_overrides import apply_symmetric_standing_pitch_offsets
+from real_lite_lab.standing_pose_overrides import apply_symmetric_standing_pitch_targets
 from real_lite_lab.mujoco_standing_diagnostics import (
     DEFAULT_SUPPORT_GEOM_NAMES,
     collect_standing_diagnostics,
@@ -289,6 +289,9 @@ class RealLiteMujocoRunner:
         lock_arms: bool = False,
         ground_clearance: float = 1e-4,
         settle_steps: int = 0,
+        hip_pitch_target: float | None = None,
+        knee_pitch_target: float | None = None,
+        ankle_pitch_target: float | None = None,
         hip_pitch_offset: float = 0.0,
         knee_pitch_offset: float = 0.0,
         ankle_pitch_offset: float = 0.0,
@@ -342,6 +345,9 @@ class RealLiteMujocoRunner:
         self.lock_arms = lock_arms
         self.ground_clearance = float(ground_clearance)
         self.settle_steps = max(0, int(settle_steps))
+        self.hip_pitch_target = None if hip_pitch_target is None else float(hip_pitch_target)
+        self.knee_pitch_target = None if knee_pitch_target is None else float(knee_pitch_target)
+        self.ankle_pitch_target = None if ankle_pitch_target is None else float(ankle_pitch_target)
         self.hip_pitch_offset = float(hip_pitch_offset)
         self.knee_pitch_offset = float(knee_pitch_offset)
         self.ankle_pitch_offset = float(ankle_pitch_offset)
@@ -414,9 +420,12 @@ class RealLiteMujocoRunner:
         self.dof_vel = np.zeros(self.cfg.sim.num_action)
         self.action = np.zeros(self.cfg.sim.num_action)
         self.default_dof_pos = np.array(DEFAULT_DOF_POS, dtype=np.float64)
-        self.default_dof_pos = apply_symmetric_standing_pitch_offsets(
+        self.default_dof_pos = apply_symmetric_standing_pitch_targets(
             self.default_dof_pos,
             ISAAC_POLICY_ORDER,
+            hip_pitch_target=self.hip_pitch_target,
+            knee_pitch_target=self.knee_pitch_target,
+            ankle_pitch_target=self.ankle_pitch_target,
             hip_pitch_offset=self.hip_pitch_offset,
             knee_pitch_offset=self.knee_pitch_offset,
             ankle_pitch_offset=self.ankle_pitch_offset,
@@ -546,6 +555,9 @@ class RealLiteMujocoRunner:
             f"total={total_foot_load:.2f}N, expected_weight={self.expected_total_weight:.2f}N, "
             f"load_ratio={foot_load_ratio:.3f}, ground_clearance={self.ground_clearance:+.4f}m, "
             f"settle_steps={self.settle_steps}, "
+            f"hip_pitch_target={self.hip_pitch_target if self.hip_pitch_target is not None else 'default'}, "
+            f"knee_pitch_target={self.knee_pitch_target if self.knee_pitch_target is not None else 'default'}, "
+            f"ankle_pitch_target={self.ankle_pitch_target if self.ankle_pitch_target is not None else 'default'}, "
             f"hip_pitch_offset={self.hip_pitch_offset:+.4f}rad, "
             f"knee_pitch_offset={self.knee_pitch_offset:+.4f}rad, "
             f"ankle_pitch_offset={self.ankle_pitch_offset:+.4f}rad, "
@@ -893,6 +905,24 @@ def main():
         help="Optional number of MuJoCo simulation steps to run in hold mode before trace/video collection starts.",
     )
     parser.add_argument(
+        "--hip_pitch_target",
+        type=float,
+        default=None,
+        help="Set both hip_pitch joints to this absolute standing target in radians before offsets are applied.",
+    )
+    parser.add_argument(
+        "--knee_pitch_target",
+        type=float,
+        default=None,
+        help="Set both knee_pitch joints to this absolute standing target in radians before offsets are applied.",
+    )
+    parser.add_argument(
+        "--ankle_pitch_target",
+        type=float,
+        default=None,
+        help="Set both ankle_pitch joints to this absolute standing target in radians before offsets are applied.",
+    )
+    parser.add_argument(
         "--hip_pitch_offset",
         type=float,
         default=0.0,
@@ -1005,6 +1035,9 @@ def main():
         lock_arms=args.lock_arms,
         ground_clearance=args.ground_clearance,
         settle_steps=args.settle_steps,
+        hip_pitch_target=args.hip_pitch_target,
+        knee_pitch_target=args.knee_pitch_target,
+        ankle_pitch_target=args.ankle_pitch_target,
         hip_pitch_offset=args.hip_pitch_offset,
         knee_pitch_offset=args.knee_pitch_offset,
         ankle_pitch_offset=args.ankle_pitch_offset,
