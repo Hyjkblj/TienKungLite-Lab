@@ -46,6 +46,7 @@ from real_lite_lab.constants import (
 )
 from real_lite_lab.joint_order import build_target_order_indices
 from real_lite_lab.mjcf_mesh_fallback import build_mesh_safe_model, ensure_offscreen_framebuffer_size
+from real_lite_lab.render_camera import camera_preset_names, get_camera_preset
 
 
 MJCF_PATH = MJCF_DIR / "real_lite.xml"
@@ -66,6 +67,15 @@ def _actuator_joint_names(model: mujoco.MjModel) -> list[str]:
             raise ValueError(f"Unable to resolve joint name for actuator {actuator_id}.")
         joint_names.append(joint_name)
     return joint_names
+
+
+def _model_camera_names(model: mujoco.MjModel) -> list[str]:
+    camera_names: list[str] = []
+    for camera_id in range(model.ncam):
+        camera_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_CAMERA, camera_id)
+        if camera_name is not None:
+            camera_names.append(camera_name)
+    return camera_names
 
 
 class RealLiteSim2SimCfg:
@@ -197,12 +207,23 @@ class RealLiteMujocoRunner:
         self.save_video = save_video
         self.video_fps = video_fps
         self.camera = camera
+        self.camera_preset = get_camera_preset(camera)
         self.initial_command_vel = np.array(command_vel, dtype=np.float64)
         self.frame_interval = 1.0 / video_fps if save_video is not None else None
         self.next_frame_time = 0.0
         self.viewer = None
         self.renderer = None
+        self.render_camera = None
         self.video_sink = None
+        self.model_camera_names = tuple(_model_camera_names(self.model))
+
+        if self.camera is not None and self.camera_preset is None and self.camera not in self.model_camera_names:
+            available_model_cameras = ", ".join(self.model_camera_names) if self.model_camera_names else "none"
+            raise ValueError(
+                f"Unknown camera '{self.camera}'. "
+                f"Available presets: {', '.join(camera_preset_names())}. "
+                f"Available model cameras: {available_model_cameras}."
+            )
 
         if self.save_video is None:
             if mujoco_viewer is None:
@@ -216,6 +237,10 @@ class RealLiteMujocoRunner:
             framebuffer_size = ensure_offscreen_framebuffer_size(self.model, width=width, height=height)
             if framebuffer_size is not None:
                 print(f"[INFO] Offscreen framebuffer resized to: {framebuffer_size[0]}x{framebuffer_size[1]}")
+            if self.camera_preset is not None:
+                self.render_camera = mujoco.MjvCamera()
+                self.render_camera.type = mujoco.mjtCamera.mjCAMERA_FREE
+                print(f"[INFO] Using camera preset: {self.camera}")
             self.renderer = mujoco.Renderer(self.model, height=height, width=width)
             self.video_sink = _create_video_sink(self.save_video, fps=video_fps, width=width, height=height)
 
@@ -355,12 +380,25 @@ class RealLiteMujocoRunner:
     def _render_offscreen_frame(self) -> None:
         if self.renderer is None or self.video_sink is None:
             return
-        if self.camera is None:
+        if self.camera_preset is not None:
+            self._update_preset_camera()
+            self.renderer.update_scene(self.data, camera=self.render_camera)
+        elif self.camera is None:
             self.renderer.update_scene(self.data)
         else:
             self.renderer.update_scene(self.data, camera=self.camera)
         frame = self.renderer.render()
         self.video_sink.write_frame(frame)
+
+    def _update_preset_camera(self) -> None:
+        if self.render_camera is None or self.camera_preset is None:
+            return
+        root_pos = np.asarray(self.data.qpos[:3], dtype=np.float64)
+        lookat_offset = np.asarray(self.camera_preset["lookat_offset"], dtype=np.float64)
+        self.render_camera.lookat[:] = root_pos + lookat_offset
+        self.render_camera.distance = float(self.camera_preset["distance"])
+        self.render_camera.azimuth = float(self.camera_preset["azimuth"])
+        self.render_camera.elevation = float(self.camera_preset["elevation"])
 
     def _close_rendering(self) -> None:
         if self.viewer is not None:
@@ -441,7 +479,14 @@ def main():
     parser.add_argument("--fps", type=float, default=30.0, help="Video FPS when --save_video is set.")
     parser.add_argument("--width", type=int, default=1280, help="Video width when --save_video is set.")
     parser.add_argument("--height", type=int, default=720, help="Video height when --save_video is set.")
-    parser.add_argument("--camera", default=None, help="Optional MuJoCo camera name for offscreen rendering.")
+    parser.add_argument(
+        "--camera",
+        default=None,
+        help=(
+            "Optional offscreen camera preset or MuJoCo camera name. "
+            f"Built-in presets: {', '.join(camera_preset_names())}."
+        ),
+    )
     parser.add_argument("--command_vx", type=float, default=0.0, help="Initial commanded forward velocity.")
     parser.add_argument("--command_vy", type=float, default=0.0, help="Initial commanded lateral velocity.")
     parser.add_argument("--command_wz", type=float, default=0.0, help="Initial commanded yaw velocity.")
