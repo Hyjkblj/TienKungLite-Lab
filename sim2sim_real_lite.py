@@ -189,7 +189,7 @@ class RealLiteMujocoRunner:
     def __init__(
         self,
         cfg: RealLiteSim2SimCfg,
-        policy_path: Path,
+        policy_path: Path | None,
         model_path: Path,
         *,
         save_video: Path | None = None,
@@ -198,11 +198,15 @@ class RealLiteMujocoRunner:
         height: int = 720,
         camera: str | None = None,
         command_vel: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        control_mode: str = "policy",
+        trace_path: Path | None = None,
+        trace_steps: int = 0,
     ):
         self.cfg = cfg
         self.model = self._load_model_with_mesh_fallback(model_path)
         self.model.opt.timestep = self.cfg.sim.dt
-        self.policy = torch.jit.load(str(policy_path))
+        self.control_mode = control_mode
+        self.policy = torch.jit.load(str(policy_path)) if self.control_mode == "policy" and policy_path is not None else None
         self.data = mujoco.MjData(self.model)
 
         self.save_video = save_video
@@ -217,6 +221,9 @@ class RealLiteMujocoRunner:
         self.render_camera = None
         self.video_sink = None
         self.model_camera_names = tuple(_model_camera_names(self.model))
+        self.trace_path = trace_path
+        self.trace_steps = max(0, int(trace_steps))
+        self.trace_records: list[dict[str, np.ndarray | float | int]] = []
 
         if self.camera is not None and self.camera_preset is None and self.camera not in self.model_camera_names:
             available_model_cameras = ", ".join(self.model_camera_names) if self.model_camera_names else "none"
@@ -287,15 +294,39 @@ class RealLiteMujocoRunner:
         self.obs_history = np.zeros(
             (self.cfg.sim.num_obs_per_step * self.cfg.sim.actor_obs_history_length,), dtype=np.float32
         )
-        self.sensor_joint_name_to_idx = {name: idx for idx, name in enumerate(MUJOCO_SENSOR_ORDER)}
+        self.latest_obs_step = np.zeros(self.cfg.sim.num_obs_per_step, dtype=np.float32)
         self.actuator_joint_names = _actuator_joint_names(self.model)
+        self.joint_pos_sensor_names, self.joint_pos_sensor_adr = self._joint_sensor_layout(mujoco.mjtSensor.mjSENS_JOINTPOS)
+        self.joint_vel_sensor_names, self.joint_vel_sensor_adr = self._joint_sensor_layout(mujoco.mjtSensor.mjSENS_JOINTVEL)
+        self.sensor_joint_name_to_idx = {name: idx for idx, name in enumerate(self.joint_pos_sensor_names)}
+        self.vel_sensor_joint_name_to_idx = {name: idx for idx, name in enumerate(self.joint_vel_sensor_names)}
         self.mujoco_to_isaac_idx = [self.sensor_joint_name_to_idx[name] for name in ISAAC_POLICY_ORDER]
+        self.mujoco_vel_to_isaac_idx = [self.vel_sensor_joint_name_to_idx[name] for name in ISAAC_POLICY_ORDER]
 
         if len(self.actuator_joint_names) != self.cfg.sim.num_action:
             raise ValueError(
                 f"Actuator count mismatch: expected {self.cfg.sim.num_action}, got {len(self.actuator_joint_names)}."
             )
         self.isaac_to_mujoco_actuator_idx = build_target_order_indices(ISAAC_POLICY_ORDER, self.actuator_joint_names)
+
+    def _joint_sensor_layout(self, sensor_type: int) -> tuple[list[str], np.ndarray]:
+        joint_names: list[str] = []
+        sensor_adr: list[int] = []
+        for sensor_id in range(self.model.nsensor):
+            if int(self.model.sensor_type[sensor_id]) != int(sensor_type):
+                continue
+            joint_id = int(self.model.sensor_objid[sensor_id])
+            joint_name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
+            if joint_name is None:
+                raise ValueError(f"Unable to resolve joint name for sensor {sensor_id}.")
+            joint_names.append(joint_name)
+            sensor_adr.append(int(self.model.sensor_adr[sensor_id]))
+
+        if len(joint_names) != self.cfg.sim.num_action:
+            raise ValueError(
+                f"Sensor count mismatch for type {sensor_type}: expected {self.cfg.sim.num_action}, got {len(joint_names)}."
+            )
+        return joint_names, np.asarray(sensor_adr, dtype=np.int32)
 
     def _initialize_sim_state(self) -> None:
         apply_default_joint_state(
@@ -322,9 +353,8 @@ class RealLiteMujocoRunner:
         self.gait_phase[1] = (t + self.phase_offset[1]) % 1.0
 
     def get_obs(self) -> np.ndarray:
-        n = self.cfg.sim.num_action
-        self.dof_pos = self.data.sensordata[0:n]
-        self.dof_vel = self.data.sensordata[n : 2 * n]
+        self.dof_pos = np.asarray(self.data.sensordata[self.joint_pos_sensor_adr], dtype=np.float64)
+        self.dof_vel = np.asarray(self.data.sensordata[self.joint_vel_sensor_adr], dtype=np.float64)
         obs = np.concatenate(
             [
                 self.data.sensor("angular-velocity").data.astype(np.double),
@@ -334,7 +364,7 @@ class RealLiteMujocoRunner:
                 ),
                 self.command_vel,
                 (self.dof_pos - self.default_dof_pos)[self.mujoco_to_isaac_idx],
-                self.dof_vel[self.mujoco_to_isaac_idx],
+                self.dof_vel[self.mujoco_vel_to_isaac_idx],
                 np.clip(self.action, -self.cfg.sim.clip_actions, self.cfg.sim.clip_actions),
                 np.sin(2 * np.pi * self.gait_phase),
                 np.cos(2 * np.pi * self.gait_phase),
@@ -346,6 +376,7 @@ class RealLiteMujocoRunner:
             raise ValueError(
                 f"Observation size mismatch: expected {self.cfg.sim.num_obs_per_step}, got {obs.shape[0]}."
             )
+        self.latest_obs_step = obs.copy()
         self.obs_history[: -self.cfg.sim.num_obs_per_step] = self.obs_history[self.cfg.sim.num_obs_per_step :]
         self.obs_history[-self.cfg.sim.num_obs_per_step :] = obs.copy()
         return np.clip(self.obs_history, -self.cfg.sim.clip_observations, self.cfg.sim.clip_observations)
@@ -426,6 +457,46 @@ class RealLiteMujocoRunner:
                 close_renderer()
             self.renderer = None
 
+    def _append_trace_record(self) -> None:
+        if self.trace_path is None or len(self.trace_records) >= self.trace_steps:
+            return
+
+        record = {
+            "policy_step": int(self.episode_length_buf),
+            "sim_time": float(self.data.time),
+            "root_pos": np.asarray(self.data.qpos[:3], dtype=np.float64).copy(),
+            "root_quat_wxyz": np.asarray(self.data.qpos[3:7], dtype=np.float64).copy(),
+            "command_vel": self.command_vel.astype(np.float64).copy(),
+            "angular_velocity": self.data.sensor("angular-velocity").data.astype(np.float64).copy(),
+            "projected_gravity": self.quat_rotate_inverse(
+                self.data.sensor("orientation").data[[1, 2, 3, 0]].astype(np.float64),
+                np.array([0.0, 0.0, -1.0], dtype=np.float64),
+            ),
+            "joint_pos_isaac": self.dof_pos[self.mujoco_to_isaac_idx].astype(np.float64).copy(),
+            "joint_vel_isaac": self.dof_vel[self.mujoco_vel_to_isaac_idx].astype(np.float64).copy(),
+            "action": self.action.astype(np.float64).copy(),
+            "ctrl": np.asarray(self.data.ctrl, dtype=np.float64).copy(),
+            "obs_step": self.latest_obs_step.astype(np.float32).copy(),
+        }
+        self.trace_records.append(record)
+
+    def _flush_trace(self) -> None:
+        if self.trace_path is None or not self.trace_records:
+            return
+
+        self.trace_path.parent.mkdir(parents=True, exist_ok=True)
+        keys = tuple(self.trace_records[0].keys())
+        stacked = {}
+        for key in keys:
+            values = [record[key] for record in self.trace_records]
+            first_value = values[0]
+            if np.isscalar(first_value):
+                stacked[key] = np.asarray(values)
+            else:
+                stacked[key] = np.stack(values, axis=0)
+        np.savez_compressed(self.trace_path, **stacked)
+        print(f"[INFO] Saved sim2sim trace to: {self.trace_path}")
+
     def run(self):
         self.setup_keyboard_listener()
         if self.listener is not None:
@@ -438,9 +509,16 @@ class RealLiteMujocoRunner:
 
             while self.data.time < self.cfg.sim.sim_duration:
                 self.obs_history = self.get_obs()
-                action_tensor = self.policy(torch.tensor(self.obs_history, dtype=torch.float32))
-                self.action[:] = action_tensor.detach().cpu().numpy()[: self.cfg.sim.num_action]
-                self.action = np.clip(self.action, -self.cfg.sim.clip_actions, self.cfg.sim.clip_actions)
+                if self.control_mode == "policy":
+                    if self.policy is None:
+                        raise RuntimeError("Policy mode requested but no policy is loaded.")
+                    action_tensor = self.policy(torch.tensor(self.obs_history, dtype=torch.float32))
+                    self.action[:] = action_tensor.detach().cpu().numpy()[: self.cfg.sim.num_action]
+                    self.action = np.clip(self.action, -self.cfg.sim.clip_actions, self.cfg.sim.clip_actions)
+                else:
+                    self.action[:] = 0.0
+
+                self._append_trace_record()
 
                 for _ in range(self.cfg.sim.decimation):
                     step_start_time = time.time()
@@ -464,6 +542,7 @@ class RealLiteMujocoRunner:
             if self.listener is not None:
                 self.listener.stop()
             self._close_rendering()
+            self._flush_trace()
 
         if self.save_video is not None:
             print(f"[INFO] Saved rollout video to: {self.save_video}")
@@ -485,7 +564,7 @@ def build_cfg(task_name: str, duration: float, enable_keyboard_commands: bool) -
 def main():
     parser = argparse.ArgumentParser(description="Run Real Lite sim2sim Mujoco controller.")
     parser.add_argument("--task", required=True, choices=TASK_NAMES)
-    parser.add_argument("--policy", required=True, help="Path to exported policy.pt")
+    parser.add_argument("--policy", default=None, help="Path to exported policy.pt")
     parser.add_argument("--model", default=str(MJCF_PATH), help="Path to Real Lite MuJoCo XML")
     parser.add_argument("--duration", type=float, default=100.0)
     parser.add_argument("--save_video", default=None, help="Optional output mp4 path for headless offscreen rendering.")
@@ -503,15 +582,37 @@ def main():
     parser.add_argument("--command_vx", type=float, default=0.0, help="Initial commanded forward velocity.")
     parser.add_argument("--command_vy", type=float, default=0.0, help="Initial commanded lateral velocity.")
     parser.add_argument("--command_wz", type=float, default=0.0, help="Initial commanded yaw velocity.")
+    parser.add_argument(
+        "--control_mode",
+        choices=("policy", "hold"),
+        default="policy",
+        help="Use the exported policy or hold the default pose to diagnose MuJoCo stability.",
+    )
+    parser.add_argument(
+        "--trace_out",
+        default=None,
+        help="Optional .npz output path for sim2sim debug traces collected at each policy step.",
+    )
+    parser.add_argument(
+        "--trace_steps",
+        type=int,
+        default=0,
+        help="Maximum number of policy steps to store in --trace_out. Use 0 to disable tracing.",
+    )
     args = parser.parse_args()
 
-    policy_path = Path(args.policy).resolve()
+    policy_path = Path(args.policy).resolve() if args.policy else None
     model_path = Path(args.model).resolve()
     save_video_path = Path(args.save_video).resolve() if args.save_video else None
+    trace_path = Path(args.trace_out).resolve() if args.trace_out else None
 
-    if not policy_path.is_file():
-        print(f"[ERROR] Policy file not found: {policy_path}")
-        sys.exit(1)
+    if args.control_mode == "policy":
+        if policy_path is None:
+            print("[ERROR] --policy is required when --control_mode=policy.")
+            sys.exit(1)
+        if not policy_path.is_file():
+            print(f"[ERROR] Policy file not found: {policy_path}")
+            sys.exit(1)
     if not model_path.is_file():
         print(f"[ERROR] MuJoCo model file not found: {model_path}")
         print("[INFO] Run generate_real_lite_mjcf.py first.")
@@ -521,6 +622,9 @@ def main():
         sys.exit(1)
     if save_video_path is not None and (args.width <= 0 or args.height <= 0):
         print(f"[ERROR] Video size must be positive, got width={args.width}, height={args.height}.")
+        sys.exit(1)
+    if trace_path is not None and args.trace_steps <= 0:
+        print("[ERROR] --trace_steps must be positive when --trace_out is set.")
         sys.exit(1)
 
     cfg = build_cfg(args.task, args.duration, enable_keyboard_commands=save_video_path is None)
@@ -536,6 +640,9 @@ def main():
         height=args.height,
         camera=args.camera,
         command_vel=command_vel,
+        control_mode=args.control_mode,
+        trace_path=trace_path,
+        trace_steps=args.trace_steps,
     )
     runner.run()
 
