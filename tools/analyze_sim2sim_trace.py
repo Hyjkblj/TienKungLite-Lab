@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import argparse
-import math
 from pathlib import Path
 
 import numpy as np
+
+from real_lite_lab.constants import DEFAULT_DOF_POS, POLICY_JOINT_NAMES
 
 
 def _load_trace(trace_path: Path) -> dict[str, np.ndarray]:
@@ -32,6 +33,12 @@ def _format_event(label: str, index: int | None, times: np.ndarray) -> str:
     return f"{label}: step={index}, time={times[index]:.3f}s"
 
 
+def _top_joint_table(values: np.ndarray, *, topk: int = 5) -> str:
+    abs_values = np.abs(values)
+    order = np.argsort(abs_values)[::-1][:topk]
+    return ", ".join(f"{POLICY_JOINT_NAMES[idx]}={values[idx]:+.4f}" for idx in order)
+
+
 def analyze_trace(trace_path: Path, *, height_drop_threshold: float, tilt_threshold_deg: float) -> list[str]:
     trace = _load_trace(trace_path)
 
@@ -51,6 +58,7 @@ def analyze_trace(trace_path: Path, *, height_drop_threshold: float, tilt_thresh
     projected_gravity = np.asarray(trace["projected_gravity"], dtype=np.float64)
     angular_velocity = np.asarray(trace["angular_velocity"], dtype=np.float64)
     joint_vel = np.asarray(trace["joint_vel_isaac"], dtype=np.float64)
+    joint_pos = np.asarray(trace.get("joint_pos_isaac"), dtype=np.float64) if "joint_pos_isaac" in trace else None
 
     tilt_deg = _tilt_deg_from_projected_gravity(projected_gravity)
     root_z = root_pos[:, 2]
@@ -99,6 +107,35 @@ def analyze_trace(trace_path: Path, *, height_drop_threshold: float, tilt_thresh
             f"ctrl_range: start={ctrl_range[0]:.4f}, end={ctrl_range[-1]:.4f}, "
             f"max={ctrl_range[max_ctrl_range_idx]:.4f} at {times[max_ctrl_range_idx]:.3f}s"
         )
+
+    event_indices: list[tuple[str, int]] = []
+    for label, index in (
+        ("tilt_event", tilt_event_idx),
+        ("drop_event", drop_event_idx),
+        ("severe_tilt", severe_tilt_idx),
+        ("max_ang_speed", max_ang_speed_idx),
+        ("max_joint_speed", max_joint_speed_idx),
+    ):
+        if index is not None:
+            event_indices.append((label, index))
+
+    seen_indices: set[int] = set()
+    for label, index in event_indices:
+        if index in seen_indices:
+            continue
+        seen_indices.add(index)
+
+        lines.append(
+            f"{label}@{times[index]:.3f}s: root_z={root_z[index]:.4f}, tilt={tilt_deg[index]:.2f}deg, "
+            f"ang_vel={angular_velocity[index]}"
+        )
+        lines.append(f"{label} top_joint_vel: {_top_joint_table(joint_vel[index])}")
+        if joint_pos is not None:
+            default_dof_pos = np.asarray(DEFAULT_DOF_POS, dtype=np.float64)
+            joint_pos_error = joint_pos[index] - default_dof_pos
+            lines.append(f"{label} top_joint_pos_error: {_top_joint_table(joint_pos_error)}")
+        if "action" in trace:
+            lines.append(f"{label} top_action: {_top_joint_table(action[index])}")
 
     return lines
 
