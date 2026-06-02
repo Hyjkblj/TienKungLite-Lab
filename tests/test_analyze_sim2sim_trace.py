@@ -8,6 +8,8 @@ from pathlib import Path
 
 import numpy as np
 
+from real_lite_lab.constants import POLICY_JOINT_NAMES
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = REPO_ROOT / "tools" / "analyze_sim2sim_trace.py"
@@ -150,6 +152,40 @@ class AnalyzeSim2SimTraceTests(unittest.TestCase):
         joined = "\n".join(lines)
         self.assertIn("double support lost(contact-count): step=1, time=0.500s", joined)
         self.assertIn("loaded double support lost for 2 frames: step=3, time=1.500s", joined)
+
+    def test_analyze_trace_uses_recorded_standing_target_for_joint_error(self) -> None:
+        module = load_trace_module()
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trace_path = Path(tmp_dir) / "trace_standing_target.npz"
+            num_frames = 2
+            num_joints = 20
+            standing_target = np.zeros(num_joints, dtype=np.float64)
+            hip_pitch_left_idx = POLICY_JOINT_NAMES.index("hip_pitch_l_joint")
+            standing_target[hip_pitch_left_idx] = -0.4
+            joint_pos = np.zeros((num_frames, num_joints), dtype=np.float64)
+            joint_pos[1, hip_pitch_left_idx] = -0.1
+            np.savez_compressed(
+                trace_path,
+                sim_time=np.array([0.0, 1.0], dtype=np.float64),
+                root_pos=np.array([[0.0, 0.0, 1.0], [0.0, 0.0, 0.9]], dtype=np.float64),
+                projected_gravity=np.array([[0.0, 0.0, -1.0], [0.8, 0.0, -0.2]], dtype=np.float64),
+                angular_velocity=np.zeros((num_frames, 3), dtype=np.float64),
+                joint_vel_isaac=np.zeros((num_frames, num_joints), dtype=np.float64),
+                joint_pos_isaac=joint_pos,
+                standing_target_isaac=standing_target,
+            )
+
+            lines = module.analyze_trace(
+                trace_path,
+                height_drop_threshold=0.05,
+                tilt_threshold_deg=20.0,
+                support_force_threshold=20.0,
+                support_hold_steps=3,
+            )
+
+        joined = "\n".join(lines)
+        self.assertIn("tilt_event top_joint_pos_error: hip_pitch_l_joint=+0.3000", joined)
 
 
 if __name__ == "__main__":

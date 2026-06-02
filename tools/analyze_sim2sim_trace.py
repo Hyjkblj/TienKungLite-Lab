@@ -82,6 +82,11 @@ def analyze_trace(
     joint_vel = np.asarray(trace["joint_vel_isaac"], dtype=np.float64)
     joint_pos = np.asarray(trace.get("joint_pos_isaac"), dtype=np.float64) if "joint_pos_isaac" in trace else None
     policy_target = np.asarray(trace.get("policy_target_isaac"), dtype=np.float64) if "policy_target_isaac" in trace else None
+    standing_target = (
+        np.asarray(trace.get("standing_target_isaac"), dtype=np.float64)
+        if "standing_target_isaac" in trace
+        else np.asarray(DEFAULT_DOF_POS, dtype=np.float64)
+    )
     clamped_target = (
         np.asarray(trace.get("clamped_target_isaac"), dtype=np.float64) if "clamped_target_isaac" in trace else None
     )
@@ -237,8 +242,8 @@ def analyze_trace(
             lines.append(f"{label} left_load_share: {left_load_share[index]:.3f}")
         lines.append(f"{label} top_joint_vel: {_top_joint_table(joint_vel[index])}")
         if joint_pos is not None:
-            default_dof_pos = np.asarray(DEFAULT_DOF_POS, dtype=np.float64)
-            joint_pos_error = joint_pos[index] - default_dof_pos
+            reference_standing_target = standing_target[0] if standing_target.ndim == 2 else standing_target
+            joint_pos_error = joint_pos[index] - reference_standing_target
             lines.append(f"{label} top_joint_pos_error: {_top_joint_table(joint_pos_error)}")
         if "action" in trace:
             lines.append(f"{label} top_action: {_top_joint_table(action[index])}")

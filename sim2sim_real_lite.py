@@ -59,13 +59,14 @@ from real_lite_lab.alignment_config import (
 )
 from real_lite_lab.joint_order import build_target_order_indices
 from real_lite_lab.mjcf_mesh_fallback import build_mesh_safe_model, ensure_offscreen_framebuffer_size
-from real_lite_lab.mujoco_state_init import apply_default_joint_state, snap_root_height_to_ground
-from real_lite_lab.standing_pose_overrides import apply_symmetric_standing_pitch_targets
 from real_lite_lab.mujoco_standing_diagnostics import (
-    DEFAULT_SUPPORT_GEOM_NAMES,
+    DEFAULT_SUPPORT_GEOM_GROUPS,
+    SUPPORT_GEOM_GROUP_CANDIDATES,
     collect_standing_diagnostics,
     format_standing_diagnostics_summary,
 )
+from real_lite_lab.mujoco_state_init import apply_default_joint_state, snap_root_height_to_ground
+from real_lite_lab.standing_pose_overrides import apply_symmetric_standing_pitch_targets
 from real_lite_lab.render_camera import (
     camera_preset_alias_names,
     camera_preset_names,
@@ -500,7 +501,7 @@ class RealLiteMujocoRunner:
             [policy_joint_name_to_idx[name] for name in (*LEFT_ARM_JOINT_NAMES, *RIGHT_ARM_JOINT_NAMES)],
             dtype=np.int64,
         )
-        self.support_geom_name_to_id = self._support_geom_name_to_id(DEFAULT_SUPPORT_GEOM_NAMES)
+        self.support_geom_groups = self._resolve_support_geom_groups(SUPPORT_GEOM_GROUP_CANDIDATES)
         self.initial_standing_diagnostics: dict[str, np.ndarray | float] | None = None
         self.expected_total_weight = float(np.sum(np.asarray(self.model.body_mass, dtype=np.float64)) * abs(self.model.opt.gravity[2]))
 
@@ -523,28 +524,43 @@ class RealLiteMujocoRunner:
             )
         return joint_names, np.asarray(sensor_adr, dtype=np.int32)
 
-    def _support_geom_name_to_id(self, support_geom_names: tuple[str, ...]) -> dict[str, int]:
-        support_geom_name_to_id: dict[str, int] = {}
-        missing_geom_names: list[str] = []
-        for geom_name in support_geom_names:
-            geom_id = int(mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, geom_name))
-            if geom_id < 0:
-                missing_geom_names.append(geom_name)
-                continue
-            support_geom_name_to_id[geom_name] = geom_id
+    def _resolve_support_geom_groups(
+        self,
+        support_group_candidates: tuple[tuple[tuple[str, tuple[str, ...]], ...], ...],
+    ) -> dict[str, tuple[int, ...]]:
+        for candidate_groups in support_group_candidates:
+            resolved_groups: dict[str, tuple[int, ...]] = {}
+            candidate_missing = False
+            for label, geom_names in candidate_groups:
+                geom_ids: list[int] = []
+                for geom_name in geom_names:
+                    geom_id = int(mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, geom_name))
+                    if geom_id < 0:
+                        candidate_missing = True
+                        break
+                    geom_ids.append(geom_id)
+                if candidate_missing:
+                    break
+                resolved_groups[label] = tuple(geom_ids)
+            if resolved_groups and not candidate_missing:
+                group_summary = ", ".join(
+                    f"{label}=({', '.join(geom_names)})" for label, geom_names in candidate_groups
+                )
+                print(f"[INFO] Using support geom groups: {group_summary}")
+                return resolved_groups
 
-        if missing_geom_names:
-            raise ValueError(f"Support geoms not found in MuJoCo model: {', '.join(missing_geom_names)}")
-        return support_geom_name_to_id
+        default_groups = dict(DEFAULT_SUPPORT_GEOM_GROUPS)
+        missing_geom_names = sorted({geom_name for geom_names in default_groups.values() for geom_name in geom_names})
+        raise ValueError(f"Support geoms not found in MuJoCo model: {', '.join(missing_geom_names)}")
 
     def _collect_standing_diagnostics(self) -> dict[str, np.ndarray | float]:
-        return collect_standing_diagnostics(self.model, self.data, self.support_geom_name_to_id)
+        return collect_standing_diagnostics(self.model, self.data, self.support_geom_groups)
 
     def _print_standing_diagnostics(self, diagnostics: dict[str, np.ndarray | float], *, label: str) -> None:
         print(f"[INFO] Standing diagnostics snapshot: {label}")
         for line in format_standing_diagnostics_summary(
             diagnostics,
-            support_names=tuple(self.support_geom_name_to_id.keys()),
+            support_names=tuple(self.support_geom_groups.keys()),
         ):
             print(line)
 
@@ -774,6 +790,7 @@ class RealLiteMujocoRunner:
                 stacked[key] = np.asarray(values)
             else:
                 stacked[key] = np.stack(values, axis=0)
+        stacked["standing_target_isaac"] = self.default_dof_pos.astype(np.float64).copy()
         np.savez_compressed(self.trace_path, **stacked)
         print(f"[INFO] Saved sim2sim trace to: {self.trace_path}")
 

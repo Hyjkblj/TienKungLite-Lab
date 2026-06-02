@@ -84,6 +84,64 @@ class MujocoStandingDiagnosticsTests(unittest.TestCase):
         np.testing.assert_allclose(diagnostics["com_world"], np.array([0.0033333333, 0.0, 0.5333333333]), atol=1e-8)
         self.assertGreater(float(diagnostics["support_margin"]), 0.0)
 
+    def test_compute_support_polygon_xy_accepts_toe_rail_cylinders(self) -> None:
+        module = load_diagnostics_module()
+        identity_rot = np.eye(3, dtype=np.float64)
+        cylinder_rot = np.array(
+            [
+                [0.0, 0.0, 1.0],
+                [0.0, 1.0, 0.0],
+                [-1.0, 0.0, 0.0],
+            ],
+            dtype=np.float64,
+        )
+        fake_mujoco = SimpleNamespace(
+            mjtGeom=SimpleNamespace(
+                mjGEOM_BOX=0,
+                mjGEOM_SPHERE=1,
+                mjGEOM_CAPSULE=3,
+                mjGEOM_CYLINDER=5,
+            )
+        )
+        model = SimpleNamespace(
+            geom_type=np.array([5, 5, 5, 5], dtype=np.int32),
+            geom_size=np.array(
+                [
+                    [0.015, 0.115, 0.0],
+                    [0.015, 0.115, 0.0],
+                    [0.015, 0.115, 0.0],
+                    [0.015, 0.115, 0.0],
+                ],
+                dtype=np.float64,
+            ),
+            geom_rbound=np.full(4, 0.13, dtype=np.float64),
+        )
+        data = SimpleNamespace(
+            geom_xpos=np.array(
+                [
+                    [0.035, 0.025, -0.042],
+                    [0.035, -0.025, -0.042],
+                    [0.035, 0.025, -0.042],
+                    [0.035, -0.025, -0.042],
+                ],
+                dtype=np.float64,
+            ),
+            geom_xmat=np.stack([cylinder_rot.reshape(9)] * 4, axis=0),
+        )
+
+        with mock.patch.dict(sys.modules, {"mujoco": fake_mujoco}):
+            polygon_xy = module.compute_support_polygon_xy(
+                model,
+                data,
+                {
+                    "left": (0, 1),
+                    "right": (2, 3),
+                },
+            )
+
+        np.testing.assert_allclose(np.min(polygon_xy, axis=0), np.array([-0.08, -0.04]), atol=1e-9)
+        np.testing.assert_allclose(np.max(polygon_xy, axis=0), np.array([0.15, 0.04]), atol=1e-9)
+
     def test_compute_support_contact_summary_counts_per_foot_contacts(self) -> None:
         module = load_diagnostics_module()
         contact_normal_forces = [120.0, 80.0, 10.0]

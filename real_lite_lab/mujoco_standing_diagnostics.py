@@ -6,6 +6,30 @@ import numpy as np
 
 
 DEFAULT_SUPPORT_GEOM_NAMES = ("sole_left", "sole_right")
+DEFAULT_SUPPORT_GEOM_GROUPS = (
+    ("left", ("sole_left",)),
+    ("right", ("sole_right",)),
+)
+TOE_RAIL_SUPPORT_GEOM_GROUPS = (
+    ("left", ("toe1_left", "toe2_left")),
+    ("right", ("toe1_right", "toe2_right")),
+)
+SUPPORT_GEOM_GROUP_CANDIDATES = (
+    DEFAULT_SUPPORT_GEOM_GROUPS,
+    TOE_RAIL_SUPPORT_GEOM_GROUPS,
+)
+
+
+def _normalize_support_geom_groups(
+    support_geom_groups: Mapping[str, Sequence[int] | int],
+) -> dict[str, tuple[int, ...]]:
+    normalized: dict[str, tuple[int, ...]] = {}
+    for label, geom_ids in support_geom_groups.items():
+        if np.isscalar(geom_ids):
+            normalized[label] = (int(geom_ids),)
+            continue
+        normalized[label] = tuple(int(geom_id) for geom_id in geom_ids)
+    return normalized
 
 
 def _convex_hull_xy(points_xy: np.ndarray) -> np.ndarray:
@@ -98,9 +122,92 @@ def _project_box_geom_xy_corners(model, data, geom_id: int) -> np.ndarray:
     return world_corners[:, :2]
 
 
-def compute_support_polygon_xy(model, data, support_geom_ids: Sequence[int]) -> np.ndarray:
+def _project_cylindrical_geom_xy_corners(model, data, geom_id: int) -> np.ndarray:
+    center = np.asarray(data.geom_xpos[geom_id], dtype=np.float64)
+    rotation = np.asarray(data.geom_xmat[geom_id], dtype=np.float64).reshape(3, 3)
+    size = np.asarray(model.geom_size[geom_id], dtype=np.float64)
+
+    radius = float(size[0])
+    half_length = float(size[1])
+    axis_world = rotation[:, 2]
+    end_a = center - axis_world * half_length
+    end_b = center + axis_world * half_length
+
+    axis_xy = axis_world[:2]
+    axis_xy_norm = float(np.linalg.norm(axis_xy))
+    if axis_xy_norm <= 1e-12:
+        return np.asarray(
+            [
+                center[:2] + np.array([radius, 0.0], dtype=np.float64),
+                center[:2] + np.array([-radius, 0.0], dtype=np.float64),
+                center[:2] + np.array([0.0, radius], dtype=np.float64),
+                center[:2] + np.array([0.0, -radius], dtype=np.float64),
+            ],
+            dtype=np.float64,
+        )
+
+    normal_xy = np.array([-axis_xy[1], axis_xy[0]], dtype=np.float64) / axis_xy_norm
+    return np.asarray(
+        [
+            end_a[:2] + normal_xy * radius,
+            end_a[:2] - normal_xy * radius,
+            end_b[:2] + normal_xy * radius,
+            end_b[:2] - normal_xy * radius,
+        ],
+        dtype=np.float64,
+    )
+
+
+def _project_sphere_geom_xy_boundary(model, data, geom_id: int) -> np.ndarray:
+    center = np.asarray(data.geom_xpos[geom_id], dtype=np.float64)
+    radius = float(np.asarray(model.geom_size[geom_id], dtype=np.float64)[0])
+    return np.asarray(
+        [
+            center[:2] + np.array([radius, 0.0], dtype=np.float64),
+            center[:2] + np.array([-radius, 0.0], dtype=np.float64),
+            center[:2] + np.array([0.0, radius], dtype=np.float64),
+            center[:2] + np.array([0.0, -radius], dtype=np.float64),
+        ],
+        dtype=np.float64,
+    )
+
+
+def _project_geom_xy_boundary(model, data, geom_id: int) -> np.ndarray:
+    geom_type_array = getattr(model, "geom_type", None)
+    if geom_type_array is None:
+        return _project_box_geom_xy_corners(model, data, geom_id)
+
+    import mujoco
+
+    geom_type = int(geom_type_array[geom_id])
+    if geom_type == int(mujoco.mjtGeom.mjGEOM_BOX):
+        return _project_box_geom_xy_corners(model, data, geom_id)
+    if geom_type in (int(mujoco.mjtGeom.mjGEOM_CYLINDER), int(mujoco.mjtGeom.mjGEOM_CAPSULE)):
+        return _project_cylindrical_geom_xy_corners(model, data, geom_id)
+    if geom_type == int(mujoco.mjtGeom.mjGEOM_SPHERE):
+        return _project_sphere_geom_xy_boundary(model, data, geom_id)
+
+    center = np.asarray(data.geom_xpos[geom_id], dtype=np.float64)
+    radius = float(model.geom_rbound[geom_id])
+    return np.asarray(
+        [
+            center[:2] + np.array([radius, 0.0], dtype=np.float64),
+            center[:2] + np.array([-radius, 0.0], dtype=np.float64),
+            center[:2] + np.array([0.0, radius], dtype=np.float64),
+            center[:2] + np.array([0.0, -radius], dtype=np.float64),
+        ],
+        dtype=np.float64,
+    )
+
+
+def compute_support_polygon_xy(model, data, support_geom_groups: Mapping[str, Sequence[int] | int]) -> np.ndarray:
+    normalized_groups = _normalize_support_geom_groups(support_geom_groups)
     support_points_xy = np.concatenate(
-        [_project_box_geom_xy_corners(model, data, int(geom_id)) for geom_id in support_geom_ids],
+        [
+            _project_geom_xy_boundary(model, data, int(geom_id))
+            for geom_ids in normalized_groups.values()
+            for geom_id in geom_ids
+        ],
         axis=0,
     )
     return _convex_hull_xy(support_points_xy)
@@ -125,13 +232,17 @@ def compute_mass_weighted_com(model, data) -> np.ndarray:
     return np.sum(body_com_world[positive_mass] * body_mass[positive_mass, None], axis=0) / total_mass
 
 
-def compute_nominal_support_diagnostics(model, data, support_geom_name_to_id: Mapping[str, int]) -> dict[str, np.ndarray | float]:
-    if not support_geom_name_to_id:
-        raise ValueError("support_geom_name_to_id must not be empty.")
+def compute_nominal_support_diagnostics(
+    model,
+    data,
+    support_geom_groups: Mapping[str, Sequence[int] | int],
+) -> dict[str, np.ndarray | float]:
+    normalized_groups = _normalize_support_geom_groups(support_geom_groups)
+    if not normalized_groups:
+        raise ValueError("support_geom_groups must not be empty.")
 
-    support_names = tuple(support_geom_name_to_id.keys())
-    support_ids = tuple(int(geom_id) for geom_id in support_geom_name_to_id.values())
-    support_polygon_xy = compute_support_polygon_xy(model, data, support_ids)
+    support_names = tuple(normalized_groups.keys())
+    support_polygon_xy = compute_support_polygon_xy(model, data, normalized_groups)
     com_world = compute_mass_weighted_com(model, data)
     com_xy = com_world[:2].copy()
     support_center_xy = np.mean(support_polygon_xy, axis=0)
@@ -139,7 +250,13 @@ def compute_nominal_support_diagnostics(model, data, support_geom_name_to_id: Ma
     support_bounds_max_xy = np.max(support_polygon_xy, axis=0)
 
     foot_centers_world = np.stack(
-        [np.asarray(data.geom_xpos[support_geom_name_to_id[name]], dtype=np.float64).copy() for name in support_names],
+        [
+            np.mean(
+                [np.asarray(data.geom_xpos[geom_id], dtype=np.float64) for geom_id in normalized_groups[name]],
+                axis=0,
+            )
+            for name in support_names
+        ],
         axis=0,
     )
     support_margin = signed_distance_to_convex_polygon(com_xy, support_polygon_xy)
@@ -156,10 +273,16 @@ def compute_nominal_support_diagnostics(model, data, support_geom_name_to_id: Ma
     }
 
 
-def compute_support_contact_summary(model, data, support_geom_name_to_id: Mapping[str, int]) -> dict[str, np.ndarray | float]:
+def compute_support_contact_summary(
+    model,
+    data,
+    support_geom_groups: Mapping[str, Sequence[int] | int],
+) -> dict[str, np.ndarray | float]:
     import mujoco
 
-    support_names = tuple(support_geom_name_to_id.keys())
+    normalized_groups = _normalize_support_geom_groups(support_geom_groups)
+    support_names = tuple(normalized_groups.keys())
+    support_geom_id_sets = [set(geom_ids) for geom_ids in normalized_groups.values()]
     contact_counts = np.zeros(len(support_names), dtype=np.int32)
     normal_forces = np.zeros(len(support_names), dtype=np.float64)
 
@@ -173,9 +296,8 @@ def compute_support_contact_summary(model, data, support_geom_name_to_id: Mappin
         contact = data.contact[contact_id]
         geom1 = int(contact.geom1)
         geom2 = int(contact.geom2)
-        for idx, name in enumerate(support_names):
-            geom_id = int(support_geom_name_to_id[name])
-            if geom1 == geom_id or geom2 == geom_id:
+        for idx, geom_id_set in enumerate(support_geom_id_sets):
+            if geom1 in geom_id_set or geom2 in geom_id_set:
                 contact_counts[idx] += 1
                 normal_forces[idx] += normal_force
 
@@ -189,9 +311,13 @@ def compute_support_contact_summary(model, data, support_geom_name_to_id: Mappin
     }
 
 
-def collect_standing_diagnostics(model, data, support_geom_name_to_id: Mapping[str, int]) -> dict[str, np.ndarray | float]:
-    diagnostics = compute_nominal_support_diagnostics(model, data, support_geom_name_to_id)
-    diagnostics.update(compute_support_contact_summary(model, data, support_geom_name_to_id))
+def collect_standing_diagnostics(
+    model,
+    data,
+    support_geom_groups: Mapping[str, Sequence[int] | int],
+) -> dict[str, np.ndarray | float]:
+    diagnostics = compute_nominal_support_diagnostics(model, data, support_geom_groups)
+    diagnostics.update(compute_support_contact_summary(model, data, support_geom_groups))
     return diagnostics
 
 
