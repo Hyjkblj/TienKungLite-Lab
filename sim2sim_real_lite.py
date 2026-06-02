@@ -37,10 +37,12 @@ if str(PIPELINE_DIR) not in sys.path:
 
 from real_lite_lab.constants import (
     DEFAULT_DOF_POS,
+    LEFT_ARM_JOINT_NAMES,
     MJCF_DIR,
     OBS_PER_STEP_DIM,
     POLICY_JOINT_COUNT,
     POLICY_JOINT_NAMES,
+    RIGHT_ARM_JOINT_NAMES,
     TASK_NAMES,
     TASK_PRESETS,
 )
@@ -201,6 +203,7 @@ class RealLiteMujocoRunner:
         control_mode: str = "policy",
         trace_path: Path | None = None,
         trace_steps: int = 0,
+        lock_arms: bool = False,
     ):
         self.cfg = cfg
         self.model = self._load_model_with_mesh_fallback(model_path)
@@ -224,6 +227,7 @@ class RealLiteMujocoRunner:
         self.trace_path = trace_path
         self.trace_steps = max(0, int(trace_steps))
         self.trace_records: list[dict[str, np.ndarray | float | int]] = []
+        self.lock_arms = lock_arms
 
         if self.camera is not None and self.camera_preset is None and self.camera not in self.model_camera_names:
             available_model_cameras = ", ".join(self.model_camera_names) if self.model_camera_names else "none"
@@ -308,6 +312,11 @@ class RealLiteMujocoRunner:
                 f"Actuator count mismatch: expected {self.cfg.sim.num_action}, got {len(self.actuator_joint_names)}."
             )
         self.isaac_to_mujoco_actuator_idx = build_target_order_indices(ISAAC_POLICY_ORDER, self.actuator_joint_names)
+        policy_joint_name_to_idx = {name: idx for idx, name in enumerate(ISAAC_POLICY_ORDER)}
+        self.arm_action_ids = np.array(
+            [policy_joint_name_to_idx[name] for name in (*LEFT_ARM_JOINT_NAMES, *RIGHT_ARM_JOINT_NAMES)],
+            dtype=np.int64,
+        )
 
     def _joint_sensor_layout(self, sensor_type: int) -> tuple[list[str], np.ndarray]:
         joint_names: list[str] = []
@@ -519,6 +528,8 @@ class RealLiteMujocoRunner:
                     action_tensor = self.policy(torch.tensor(self.obs_history, dtype=torch.float32))
                     self.action[:] = action_tensor.detach().cpu().numpy()[: self.cfg.sim.num_action]
                     self.action = np.clip(self.action, -self.cfg.sim.clip_actions, self.cfg.sim.clip_actions)
+                    if self.lock_arms:
+                        self.action[self.arm_action_ids] = 0.0
                 else:
                     self.action[:] = 0.0
 
@@ -603,6 +614,11 @@ def main():
         default=0,
         help="Maximum number of policy steps to store in --trace_out. Use 0 to disable tracing.",
     )
+    parser.add_argument(
+        "--lock_arms",
+        action="store_true",
+        help="Keep all arm joints at their default pose after policy inference for sim2sim debugging.",
+    )
     args = parser.parse_args()
 
     policy_path = Path(args.policy).resolve() if args.policy else None
@@ -647,6 +663,7 @@ def main():
         control_mode=args.control_mode,
         trace_path=trace_path,
         trace_steps=args.trace_steps,
+        lock_arms=args.lock_arms,
     )
     runner.run()
 
