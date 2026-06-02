@@ -3,7 +3,9 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
@@ -36,6 +38,7 @@ if str(PIPELINE_DIR) not in sys.path:
     sys.path.insert(0, str(PIPELINE_DIR))
 
 from real_lite_lab.constants import (
+    ANKLE_JOINT_NAMES,
     DEFAULT_DOF_POS,
     LEFT_ARM_JOINT_NAMES,
     MJCF_DIR,
@@ -92,6 +95,72 @@ def _model_camera_names(model: mujoco.MjModel) -> list[str]:
         if camera_name is not None:
             camera_names.append(camera_name)
     return camera_names
+
+
+def _write_xml_tree(output_path: Path, tree: ET.ElementTree) -> None:
+    indent = getattr(ET, "indent", None)
+    if callable(indent):
+        indent(tree, space="  ")
+    tree.write(output_path, encoding="utf-8", xml_declaration=True)
+
+
+def _apply_actuator_scales_to_xml(
+    model_path: Path,
+    *,
+    joint_kp_scales: dict[str, float],
+    joint_kv_scales: dict[str, float],
+) -> Path:
+    if not joint_kp_scales and not joint_kv_scales:
+        return model_path
+
+    tree = ET.parse(model_path)
+    root = tree.getroot()
+    updated_lines: list[str] = []
+    for actuator_elem in root.findall("./actuator/position"):
+        joint_name = actuator_elem.get("joint")
+        if not joint_name:
+            continue
+
+        kp_scale = float(joint_kp_scales.get(joint_name, 1.0))
+        kv_scale = float(joint_kv_scales.get(joint_name, 1.0))
+        if abs(kp_scale - 1.0) <= 1e-12 and abs(kv_scale - 1.0) <= 1e-12:
+            continue
+
+        if abs(kp_scale - 1.0) > 1e-12 and actuator_elem.get("kp") is not None:
+            old_kp = float(actuator_elem.get("kp"))
+            actuator_elem.set("kp", f"{old_kp * kp_scale:g}")
+        if abs(kv_scale - 1.0) > 1e-12 and actuator_elem.get("kv") is not None:
+            old_kv = float(actuator_elem.get("kv"))
+            actuator_elem.set("kv", f"{old_kv * kv_scale:g}")
+
+        updated_lines.append(
+            f"{joint_name}: kp_scale={kp_scale:.3f}, kv_scale={kv_scale:.3f}"
+        )
+
+    if not updated_lines:
+        return model_path
+
+    with tempfile.NamedTemporaryFile(
+        mode="wb",
+        prefix=f"{model_path.stem}.actuator_scales.",
+        suffix=".xml",
+        dir=model_path.parent,
+        delete=False,
+    ) as handle:
+        output_path = Path(handle.name)
+
+    _write_xml_tree(output_path, tree)
+    print("[INFO] Applied actuator scale overrides:")
+    for line in updated_lines:
+        print(f"[INFO]   {line}")
+    print(f"[INFO] Using actuator-scaled model: {output_path}")
+    return output_path
+
+
+def _joint_name_scales(joint_names: tuple[str, ...], scale: float) -> dict[str, float]:
+    if abs(float(scale) - 1.0) <= 1e-12:
+        return {}
+    return {joint_name: float(scale) for joint_name in joint_names}
 
 
 class RealLiteSim2SimCfg:
@@ -220,9 +289,26 @@ class RealLiteMujocoRunner:
         lock_arms: bool = False,
         ground_clearance: float = 1e-4,
         settle_steps: int = 0,
+        ankle_pitch_kp_scale: float = 1.0,
+        ankle_pitch_kv_scale: float = 1.0,
+        ankle_roll_kp_scale: float = 1.0,
+        ankle_roll_kv_scale: float = 1.0,
     ):
         self.cfg = cfg
-        self.model = self._load_model_with_mesh_fallback(model_path)
+        ankle_pitch_joint_names = tuple(joint_name for joint_name in ANKLE_JOINT_NAMES if "ankle_pitch" in joint_name)
+        ankle_roll_joint_names = tuple(joint_name for joint_name in ANKLE_JOINT_NAMES if "ankle_roll" in joint_name)
+        actuator_scale_model_path = _apply_actuator_scales_to_xml(
+            model_path,
+            joint_kp_scales=(
+                _joint_name_scales(ankle_pitch_joint_names, ankle_pitch_kp_scale)
+                | _joint_name_scales(ankle_roll_joint_names, ankle_roll_kp_scale)
+            ),
+            joint_kv_scales=(
+                _joint_name_scales(ankle_pitch_joint_names, ankle_pitch_kv_scale)
+                | _joint_name_scales(ankle_roll_joint_names, ankle_roll_kv_scale)
+            ),
+        )
+        self.model = self._load_model_with_mesh_fallback(actuator_scale_model_path)
         self.model.opt.timestep = self.cfg.sim.dt
         self.control_mode = control_mode
         self.policy = torch.jit.load(str(policy_path)) if self.control_mode == "policy" and policy_path is not None else None
@@ -246,6 +332,10 @@ class RealLiteMujocoRunner:
         self.lock_arms = lock_arms
         self.ground_clearance = float(ground_clearance)
         self.settle_steps = max(0, int(settle_steps))
+        self.ankle_pitch_kp_scale = float(ankle_pitch_kp_scale)
+        self.ankle_pitch_kv_scale = float(ankle_pitch_kv_scale)
+        self.ankle_roll_kp_scale = float(ankle_roll_kp_scale)
+        self.ankle_roll_kv_scale = float(ankle_roll_kv_scale)
 
         if self.camera is not None and self.camera_preset is None and self.camera not in self.model_camera_names:
             available_model_cameras = ", ".join(self.model_camera_names) if self.model_camera_names else "none"
@@ -427,7 +517,9 @@ class RealLiteMujocoRunner:
             "[INFO] Foot load summary: "
             f"total={total_foot_load:.2f}N, expected_weight={self.expected_total_weight:.2f}N, "
             f"load_ratio={foot_load_ratio:.3f}, ground_clearance={self.ground_clearance:+.4f}m, "
-            f"settle_steps={self.settle_steps}"
+            f"settle_steps={self.settle_steps}, "
+            f"ankle_pitch_kp_scale={self.ankle_pitch_kp_scale:.3f}, ankle_pitch_kv_scale={self.ankle_pitch_kv_scale:.3f}, "
+            f"ankle_roll_kp_scale={self.ankle_roll_kp_scale:.3f}, ankle_roll_kv_scale={self.ankle_roll_kv_scale:.3f}"
         )
 
     def _initialize_sim_state(self) -> None:
@@ -766,6 +858,30 @@ def main():
         default=0,
         help="Optional number of MuJoCo simulation steps to run in hold mode before trace/video collection starts.",
     )
+    parser.add_argument(
+        "--ankle_pitch_kp_scale",
+        type=float,
+        default=1.0,
+        help="Multiply the MuJoCo ankle_pitch actuator kp values by this factor before loading the model.",
+    )
+    parser.add_argument(
+        "--ankle_pitch_kv_scale",
+        type=float,
+        default=1.0,
+        help="Multiply the MuJoCo ankle_pitch actuator kv values by this factor before loading the model.",
+    )
+    parser.add_argument(
+        "--ankle_roll_kp_scale",
+        type=float,
+        default=1.0,
+        help="Multiply the MuJoCo ankle_roll actuator kp values by this factor before loading the model.",
+    )
+    parser.add_argument(
+        "--ankle_roll_kv_scale",
+        type=float,
+        default=1.0,
+        help="Multiply the MuJoCo ankle_roll actuator kv values by this factor before loading the model.",
+    )
     args = parser.parse_args()
 
     policy_path = Path(args.policy).resolve() if args.policy else None
@@ -813,6 +929,10 @@ def main():
         lock_arms=args.lock_arms,
         ground_clearance=args.ground_clearance,
         settle_steps=args.settle_steps,
+        ankle_pitch_kp_scale=args.ankle_pitch_kp_scale,
+        ankle_pitch_kv_scale=args.ankle_pitch_kv_scale,
+        ankle_roll_kp_scale=args.ankle_roll_kp_scale,
+        ankle_roll_kv_scale=args.ankle_roll_kv_scale,
     )
     runner.run()
 
