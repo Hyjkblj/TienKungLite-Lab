@@ -46,6 +46,7 @@ from real_lite_lab.constants import (
 )
 from real_lite_lab.joint_order import build_target_order_indices
 from real_lite_lab.mjcf_mesh_fallback import build_mesh_safe_model, ensure_offscreen_framebuffer_size
+from real_lite_lab.mujoco_state_init import apply_default_joint_state
 from real_lite_lab.render_camera import camera_preset_names, get_camera_preset
 
 
@@ -245,6 +246,7 @@ class RealLiteMujocoRunner:
             self.video_sink = _create_video_sink(self.save_video, fps=video_fps, width=width, height=height)
 
         self.init_variables()
+        self._initialize_sim_state()
 
     def _load_model_with_mesh_fallback(self, model_path: Path) -> mujoco.MjModel:
         try:
@@ -294,6 +296,17 @@ class RealLiteMujocoRunner:
                 f"Actuator count mismatch: expected {self.cfg.sim.num_action}, got {len(self.actuator_joint_names)}."
             )
         self.isaac_to_mujoco_actuator_idx = build_target_order_indices(ISAAC_POLICY_ORDER, self.actuator_joint_names)
+
+    def _initialize_sim_state(self) -> None:
+        apply_default_joint_state(
+            model=self.model,
+            data=self.data,
+            joint_names=ISAAC_POLICY_ORDER,
+            default_joint_pos=self.default_dof_pos,
+            joint_name_to_id=lambda joint_name: mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_name),
+        )
+        self.data.ctrl[:] = self.position_control()
+        mujoco.mj_forward(self.model, self.data)
 
     def quat_rotate_inverse(self, q: np.ndarray, v: np.ndarray) -> np.ndarray:
         q_w = q[-1]

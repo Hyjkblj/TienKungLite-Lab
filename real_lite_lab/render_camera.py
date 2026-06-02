@@ -21,10 +21,10 @@ CAMERA_PRESETS = {
         "lookat_offset": (0.0, 0.0, 0.9),
     },
     "follow_topdiag": {
-        "distance": 3.4,
+        "distance": 4.4,
         "azimuth": 135.0,
-        "elevation": -32.0,
-        "lookat_offset": (0.0, 0.0, 0.9),
+        "elevation": -30.0,
+        "lookat_offset": (0.0, 0.0, 0.8),
     },
 }
 
