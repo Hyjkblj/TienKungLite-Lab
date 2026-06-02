@@ -249,8 +249,10 @@ MJCF_TEXT = f"""<mujoco model="real_lite">
                   <inertial pos="0.004998 0 -0.026936" mass="0.6583335" diaginertia="0.00051357 0.0021761 0.0023671"/>
                   <joint name="ankle_roll_l_joint" pos="0 0 0" axis="1 0 0" range="-0.4363 0.4363" damping="1.4"/>
                   <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.75 0.75 0.75 1" mesh="ankle_roll_l_link"/>
-                  <geom name="toe1_left" contype="2" conaffinity="1" size="0.015 0.115" pos="0.035 0.025 -0.042" quat="0.707105 0 0.707108 0" type="cylinder" rgba="0.75 0.75 0.75 1"/>
-                  <geom name="toe2_left" contype="2" conaffinity="1" size="0.015 0.115" pos="0.035 -0.025 -0.042" quat="0.707105 0 0.707108 0" type="cylinder" rgba="0.75 0.75 0.75 1"/>
+                  <!-- Use a full sole contact patch instead of two narrow toe rails.
+                       This better matches the support polygon Isaac sees and reduces
+                       pitch/roll instability in MuJoCo stand tests. -->
+                  <geom name="sole_left" contype="2" conaffinity="1" size="0.115 0.040 0.015" pos="0.035 0 -0.042" type="box" rgba="0.75 0.75 0.75 1"/>
                 </body>
               </body>
             </body>
@@ -282,8 +284,7 @@ MJCF_TEXT = f"""<mujoco model="real_lite">
                   <inertial pos="0.004998 0 -0.026936" mass="0.6583335" diaginertia="0.00051357 0.0021761 0.0023671"/>
                   <joint name="ankle_roll_r_joint" pos="0 0 0" axis="1 0 0" range="-0.4363 0.4363" damping="1.4"/>
                   <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.75 0.75 0.75 1" mesh="ankle_roll_r_link"/>
-                  <geom name="toe1_right" contype="2" conaffinity="1" size="0.015 0.115" pos="0.035 0.025 -0.042" quat="0.707105 0 0.707108 0" type="cylinder" rgba="0.75 0.75 0.75 1"/>
-                  <geom name="toe2_right" contype="2" conaffinity="1" size="0.015 0.115" pos="0.035 -0.025 -0.042" quat="0.707105 0 0.707108 0" type="cylinder" rgba="0.75 0.75 0.75 1"/>
+                  <geom name="sole_right" contype="2" conaffinity="1" size="0.115 0.040 0.015" pos="0.035 0 -0.042" type="box" rgba="0.75 0.75 0.75 1"/>
                 </body>
               </body>
             </body>
