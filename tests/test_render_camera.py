@@ -46,6 +46,15 @@ class RenderCameraTests(unittest.TestCase):
         self.assertIsNone(module.get_camera_preset("not_a_camera"))
         self.assertIsNone(module.get_camera_preset(None))
 
+    def test_camera_aliases_resolve_to_canonical_presets(self) -> None:
+        module = load_render_camera_module()
+
+        self.assertEqual(module.resolve_camera_preset_name("side"), "follow_side")
+        self.assertEqual(module.resolve_camera_preset_name("front"), "follow_front")
+        self.assertEqual(module.resolve_camera_preset_name("diag"), "follow_diag")
+        self.assertEqual(module.resolve_camera_preset_name("topdiag"), "follow_topdiag")
+        self.assertEqual(module.get_camera_preset("side"), module.get_camera_preset("follow_side"))
+
 
 if __name__ == "__main__":
     unittest.main()

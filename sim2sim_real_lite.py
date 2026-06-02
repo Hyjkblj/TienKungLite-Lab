@@ -65,7 +65,12 @@ from real_lite_lab.mujoco_standing_diagnostics import (
     collect_standing_diagnostics,
     format_standing_diagnostics_summary,
 )
-from real_lite_lab.render_camera import camera_preset_names, get_camera_preset
+from real_lite_lab.render_camera import (
+    camera_preset_alias_names,
+    camera_preset_names,
+    get_camera_preset,
+    resolve_camera_preset_name,
+)
 
 
 MJCF_PATH = MJCF_DIR / "real_lite.xml"
@@ -317,6 +322,7 @@ class RealLiteMujocoRunner:
         self.save_video = save_video
         self.video_fps = video_fps
         self.camera = camera
+        self.camera_preset_name = resolve_camera_preset_name(camera)
         self.camera_preset = get_camera_preset(camera)
         self.initial_command_vel = np.array(command_vel, dtype=np.float64)
         self.frame_interval = 1.0 / video_fps if save_video is not None else None
@@ -342,6 +348,7 @@ class RealLiteMujocoRunner:
             raise ValueError(
                 f"Unknown camera '{self.camera}'. "
                 f"Available presets: {', '.join(camera_preset_names())}. "
+                f"Aliases: {', '.join(camera_preset_alias_names())}. "
                 f"Available model cameras: {available_model_cameras}."
             )
 
@@ -360,7 +367,10 @@ class RealLiteMujocoRunner:
             if self.camera_preset is not None:
                 self.render_camera = mujoco.MjvCamera()
                 self.render_camera.type = mujoco.mjtCamera.mjCAMERA_FREE
-                print(f"[INFO] Using camera preset: {self.camera}")
+                if self.camera_preset_name is not None and self.camera != self.camera_preset_name:
+                    print(f"[INFO] Using camera preset alias: {self.camera} -> {self.camera_preset_name}")
+                else:
+                    print(f"[INFO] Using camera preset: {self.camera}")
             self.renderer = mujoco.Renderer(self.model, height=height, width=width)
             self.video_sink = _create_video_sink(self.save_video, fps=video_fps, width=width, height=height)
 
@@ -815,7 +825,8 @@ def main():
         default=None,
         help=(
             "Optional offscreen camera preset or MuJoCo camera name. "
-            f"Built-in presets: {', '.join(camera_preset_names())}."
+            f"Built-in presets: {', '.join(camera_preset_names())}. "
+            f"Aliases: {', '.join(camera_preset_alias_names())}."
         ),
     )
     parser.add_argument("--command_vx", type=float, default=0.0, help="Initial commanded forward velocity.")

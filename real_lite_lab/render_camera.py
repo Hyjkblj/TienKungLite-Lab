@@ -28,12 +28,32 @@ CAMERA_PRESETS = {
     },
 }
 
+CAMERA_PRESET_ALIASES = {
+    "diag": "follow_diag",
+    "side": "follow_side",
+    "front": "follow_front",
+    "topdiag": "follow_topdiag",
+}
 
-def get_camera_preset(camera_name: str | None) -> dict | None:
+
+def resolve_camera_preset_name(camera_name: str | None) -> str | None:
     if camera_name is None:
         return None
-    return CAMERA_PRESETS.get(camera_name)
+    if camera_name in CAMERA_PRESETS:
+        return camera_name
+    return CAMERA_PRESET_ALIASES.get(camera_name)
+
+
+def get_camera_preset(camera_name: str | None) -> dict | None:
+    resolved_name = resolve_camera_preset_name(camera_name)
+    if resolved_name is None:
+        return None
+    return CAMERA_PRESETS.get(resolved_name)
 
 
 def camera_preset_names() -> tuple[str, ...]:
     return tuple(CAMERA_PRESETS.keys())
+
+
+def camera_preset_alias_names() -> tuple[str, ...]:
+    return tuple(CAMERA_PRESET_ALIASES.keys())
