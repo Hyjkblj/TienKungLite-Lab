@@ -218,6 +218,8 @@ class RealLiteMujocoRunner:
         trace_path: Path | None = None,
         trace_steps: int = 0,
         lock_arms: bool = False,
+        ground_clearance: float = 1e-4,
+        settle_steps: int = 0,
     ):
         self.cfg = cfg
         self.model = self._load_model_with_mesh_fallback(model_path)
@@ -242,6 +244,8 @@ class RealLiteMujocoRunner:
         self.trace_steps = max(0, int(trace_steps))
         self.trace_records: list[dict[str, np.ndarray | float | int]] = []
         self.lock_arms = lock_arms
+        self.ground_clearance = float(ground_clearance)
+        self.settle_steps = max(0, int(settle_steps))
 
         if self.camera is not None and self.camera_preset is None and self.camera not in self.model_camera_names:
             available_model_cameras = ", ".join(self.model_camera_names) if self.model_camera_names else "none"
@@ -371,6 +375,7 @@ class RealLiteMujocoRunner:
         )
         self.support_geom_name_to_id = self._support_geom_name_to_id(DEFAULT_SUPPORT_GEOM_NAMES)
         self.initial_standing_diagnostics: dict[str, np.ndarray | float] | None = None
+        self.expected_total_weight = float(np.sum(np.asarray(self.model.body_mass, dtype=np.float64)) * abs(self.model.opt.gravity[2]))
 
     def _joint_sensor_layout(self, sensor_type: int) -> tuple[list[str], np.ndarray]:
         joint_names: list[str] = []
@@ -408,6 +413,23 @@ class RealLiteMujocoRunner:
     def _collect_standing_diagnostics(self) -> dict[str, np.ndarray | float]:
         return collect_standing_diagnostics(self.model, self.data, self.support_geom_name_to_id)
 
+    def _print_standing_diagnostics(self, diagnostics: dict[str, np.ndarray | float], *, label: str) -> None:
+        print(f"[INFO] Standing diagnostics snapshot: {label}")
+        for line in format_standing_diagnostics_summary(
+            diagnostics,
+            support_names=tuple(self.support_geom_name_to_id.keys()),
+        ):
+            print(line)
+
+        total_foot_load = float(np.sum(np.asarray(diagnostics["foot_normal_forces"], dtype=np.float64)))
+        foot_load_ratio = total_foot_load / self.expected_total_weight if self.expected_total_weight > 1e-9 else float("nan")
+        print(
+            "[INFO] Foot load summary: "
+            f"total={total_foot_load:.2f}N, expected_weight={self.expected_total_weight:.2f}N, "
+            f"load_ratio={foot_load_ratio:.3f}, ground_clearance={self.ground_clearance:+.4f}m, "
+            f"settle_steps={self.settle_steps}"
+        )
+
     def _initialize_sim_state(self) -> None:
         apply_default_joint_state(
             model=self.model,
@@ -417,17 +439,26 @@ class RealLiteMujocoRunner:
             joint_name_to_id=lambda joint_name: mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_name),
         )
         mujoco.mj_forward(self.model, self.data)
-        root_height_shift = snap_root_height_to_ground(model=self.model, data=self.data)
+        root_height_shift = snap_root_height_to_ground(
+            model=self.model,
+            data=self.data,
+            clearance=self.ground_clearance,
+        )
         if abs(root_height_shift) > 1e-5:
             print(f"[INFO] Adjusted initial root height by {root_height_shift:+.4f} m to place support geoms on the floor.")
         self.data.ctrl[:] = self.position_control()
         mujoco.mj_forward(self.model, self.data)
+        pre_settle_diagnostics = self._collect_standing_diagnostics()
+        self._print_standing_diagnostics(pre_settle_diagnostics, label="pre_settle")
+
+        if self.settle_steps > 0:
+            print(f"[INFO] Running hold-settle phase for {self.settle_steps} simulation steps.")
+            for _ in range(self.settle_steps):
+                self.data.ctrl[:] = self.position_control()
+                mujoco.mj_step(self.model, self.data)
+
         self.initial_standing_diagnostics = self._collect_standing_diagnostics()
-        for line in format_standing_diagnostics_summary(
-            self.initial_standing_diagnostics,
-            support_names=tuple(self.support_geom_name_to_id.keys()),
-        ):
-            print(line)
+        self._print_standing_diagnostics(self.initial_standing_diagnostics, label="post_settle")
 
     def quat_rotate_inverse(self, q: np.ndarray, v: np.ndarray) -> np.ndarray:
         q_w = q[-1]
@@ -720,6 +751,21 @@ def main():
         action="store_true",
         help="Keep all arm joints at their default pose after policy inference for sim2sim debugging.",
     )
+    parser.add_argument(
+        "--ground_clearance",
+        type=float,
+        default=1e-4,
+        help=(
+            "Vertical clearance applied when snapping the lowest support geoms to the floor. "
+            "Negative values preload the feet slightly into the ground."
+        ),
+    )
+    parser.add_argument(
+        "--settle_steps",
+        type=int,
+        default=0,
+        help="Optional number of MuJoCo simulation steps to run in hold mode before trace/video collection starts.",
+    )
     args = parser.parse_args()
 
     policy_path = Path(args.policy).resolve() if args.policy else None
@@ -765,6 +811,8 @@ def main():
         trace_path=trace_path,
         trace_steps=args.trace_steps,
         lock_arms=args.lock_arms,
+        ground_clearance=args.ground_clearance,
+        settle_steps=args.settle_steps,
     )
     runner.run()
 
