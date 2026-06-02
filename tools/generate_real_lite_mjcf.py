@@ -1,11 +1,23 @@
 import os
 import shutil
 import struct
+import sys
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from real_lite_lab.alignment_config import (  # noqa: E402
+    JOINT_DAMPING,
+    JOINT_EFFORT_LIMIT,
+    JOINT_STIFFNESS,
+    SOFT_JOINT_POS_LIMIT_FACTOR,
+)
+from real_lite_lab.constants import POLICY_JOINT_NAMES  # noqa: E402
+
 OUTPUT_DIR = ROOT / "mjcf"
 OUTPUT_PATH = OUTPUT_DIR / "real_lite.xml"
 GENERATED_MESH_DIR = OUTPUT_DIR / "_mesh_cache"
@@ -155,6 +167,24 @@ def _prepare_mujoco_mesh_cache() -> None:
 
         triangles = _parse_ascii_stl(stl_bytes, mesh_path)
         _write_binary_stl(output_path, triangles)
+
+
+def _build_actuator_xml() -> str:
+    lines = [
+        "  <actuator>",
+        "    <!-- Match Isaac ImplicitActuator semantics more closely:",
+        "         use servo damping (kv), the same force limits, and the same soft target ranges. -->",
+    ]
+    for joint_name in POLICY_JOINT_NAMES:
+        effort_limit = JOINT_EFFORT_LIMIT[joint_name]
+        lines.append(
+            f'    <position name="{joint_name}1" joint="{joint_name}" '
+            f'kp="{JOINT_STIFFNESS[joint_name]:g}" kv="{JOINT_DAMPING[joint_name]:g}" '
+            f'ctrllimited="true" inheritrange="{SOFT_JOINT_POS_LIMIT_FACTOR:g}" '
+            f'forcelimited="true" forcerange="{-effort_limit:g} {effort_limit:g}"/>'
+        )
+    lines.append("  </actuator>")
+    return "\n".join(lines)
 
 # MuJoCo fullinertia order is:
 #   Ixx Iyy Izz Ixy Ixz Iyz
@@ -341,30 +371,7 @@ MJCF_TEXT = f"""<mujoco model="real_lite">
     </body>
   </worldbody>
 
-  <actuator>
-    <!-- Match Isaac ImplicitActuator semantics more closely:
-         use servo damping (kv) instead of passive joint damping. -->
-    <position name="hip_roll_l_joint1" joint="hip_roll_l_joint" kp="700" kv="10"/>
-    <position name="hip_yaw_l_joint1" joint="hip_yaw_l_joint" kp="500" kv="5"/>
-    <position name="hip_pitch_l_joint1" joint="hip_pitch_l_joint" kp="700" kv="10"/>
-    <position name="knee_pitch_l_joint1" joint="knee_pitch_l_joint" kp="700" kv="10"/>
-    <position name="ankle_pitch_l_joint1" joint="ankle_pitch_l_joint" kp="30" kv="2.5"/>
-    <position name="ankle_roll_l_joint1" joint="ankle_roll_l_joint" kp="16.8" kv="1.4"/>
-    <position name="hip_roll_r_joint1" joint="hip_roll_r_joint" kp="700" kv="10"/>
-    <position name="hip_yaw_r_joint1" joint="hip_yaw_r_joint" kp="500" kv="5"/>
-    <position name="hip_pitch_r_joint1" joint="hip_pitch_r_joint" kp="700" kv="10"/>
-    <position name="knee_pitch_r_joint1" joint="knee_pitch_r_joint" kp="700" kv="10"/>
-    <position name="ankle_pitch_r_joint1" joint="ankle_pitch_r_joint" kp="30" kv="2.5"/>
-    <position name="ankle_roll_r_joint1" joint="ankle_roll_r_joint" kp="16.8" kv="1.4"/>
-    <position name="shoulder_pitch_l_joint1" joint="shoulder_pitch_l_joint" kp="60" kv="3"/>
-    <position name="shoulder_roll_l_joint1" joint="shoulder_roll_l_joint" kp="20" kv="1.5"/>
-    <position name="shoulder_yaw_l_joint1" joint="shoulder_yaw_l_joint" kp="10" kv="1"/>
-    <position name="elbow_l_joint1" joint="elbow_l_joint" kp="10" kv="1"/>
-    <position name="shoulder_pitch_r_joint1" joint="shoulder_pitch_r_joint" kp="60" kv="3"/>
-    <position name="shoulder_roll_r_joint1" joint="shoulder_roll_r_joint" kp="20" kv="1.5"/>
-    <position name="shoulder_yaw_r_joint1" joint="shoulder_yaw_r_joint" kp="10" kv="1"/>
-    <position name="elbow_r_joint1" joint="elbow_r_joint" kp="10" kv="1"/>
-  </actuator>
+{_build_actuator_xml()}
 
   <sensor>
     <jointpos joint="hip_roll_l_joint" user="6"/>

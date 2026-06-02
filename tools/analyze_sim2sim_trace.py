@@ -59,6 +59,10 @@ def analyze_trace(trace_path: Path, *, height_drop_threshold: float, tilt_thresh
     angular_velocity = np.asarray(trace["angular_velocity"], dtype=np.float64)
     joint_vel = np.asarray(trace["joint_vel_isaac"], dtype=np.float64)
     joint_pos = np.asarray(trace.get("joint_pos_isaac"), dtype=np.float64) if "joint_pos_isaac" in trace else None
+    policy_target = np.asarray(trace.get("policy_target_isaac"), dtype=np.float64) if "policy_target_isaac" in trace else None
+    clamped_target = (
+        np.asarray(trace.get("clamped_target_isaac"), dtype=np.float64) if "clamped_target_isaac" in trace else None
+    )
 
     tilt_deg = _tilt_deg_from_projected_gravity(projected_gravity)
     root_z = root_pos[:, 2]
@@ -108,6 +112,19 @@ def analyze_trace(trace_path: Path, *, height_drop_threshold: float, tilt_thresh
             f"max={ctrl_range[max_ctrl_range_idx]:.4f} at {times[max_ctrl_range_idx]:.3f}s"
         )
 
+    target_clip = None
+    target_clip_event_idx = None
+    if policy_target is not None and clamped_target is not None:
+        target_clip = clamped_target - policy_target
+        target_clip_abs = np.max(np.abs(target_clip), axis=1)
+        max_target_clip_idx = int(np.argmax(target_clip_abs))
+        target_clip_event_idx = _first_index(target_clip_abs > 1e-6)
+        lines.append(
+            f"target_clip_abs_max: start={target_clip_abs[0]:.4f}, end={target_clip_abs[-1]:.4f}, "
+            f"max={target_clip_abs[max_target_clip_idx]:.4f} at {times[max_target_clip_idx]:.3f}s"
+        )
+        lines.append(_format_event("target clipped by soft limit", target_clip_event_idx, times))
+
     event_indices: list[tuple[str, int]] = []
     for label, index in (
         ("tilt_event", tilt_event_idx),
@@ -115,6 +132,7 @@ def analyze_trace(trace_path: Path, *, height_drop_threshold: float, tilt_thresh
         ("severe_tilt", severe_tilt_idx),
         ("max_ang_speed", max_ang_speed_idx),
         ("max_joint_speed", max_joint_speed_idx),
+        ("target_clip_event", target_clip_event_idx),
     ):
         if index is not None:
             event_indices.append((label, index))
@@ -136,6 +154,8 @@ def analyze_trace(trace_path: Path, *, height_drop_threshold: float, tilt_thresh
             lines.append(f"{label} top_joint_pos_error: {_top_joint_table(joint_pos_error)}")
         if "action" in trace:
             lines.append(f"{label} top_action: {_top_joint_table(action[index])}")
+        if target_clip is not None:
+            lines.append(f"{label} top_target_clip: {_top_joint_table(target_clip[index])}")
 
     return lines
 

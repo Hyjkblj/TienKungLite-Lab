@@ -21,6 +21,7 @@ venv/
 
 real_lite_lab/assets/tienkung2_lite_real/meshes/
 real_lite_lab/assets/tienkung2_lite_real/urdf/
+mjcf/_mesh_cache/
 
 .DS_Store
 Thumbs.db

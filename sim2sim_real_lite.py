@@ -46,6 +46,14 @@ from real_lite_lab.constants import (
     TASK_NAMES,
     TASK_PRESETS,
 )
+from real_lite_lab.alignment_config import (
+    DEFAULT_ACTION_SCALE,
+    DEFAULT_CLIP_ACTIONS,
+    DEFAULT_CLIP_OBSERVATIONS,
+    DEFAULT_OBS_SCALES,
+    SOFT_JOINT_POS_LIMIT_FACTOR,
+    TASK_COMMAND_RANGES,
+)
 from real_lite_lab.joint_order import build_target_order_indices
 from real_lite_lab.mjcf_mesh_fallback import build_mesh_safe_model, ensure_offscreen_framebuffer_size
 from real_lite_lab.mujoco_state_init import apply_default_joint_state, snap_root_height_to_ground
@@ -89,9 +97,10 @@ class RealLiteSim2SimCfg:
         actor_obs_history_length = 10
         dt = 0.005
         decimation = 4
-        clip_observations = 100.0
-        clip_actions = 100.0
-        action_scale = 0.25
+        clip_observations = DEFAULT_CLIP_OBSERVATIONS
+        clip_actions = DEFAULT_CLIP_ACTIONS
+        action_scale = DEFAULT_ACTION_SCALE
+        soft_joint_pos_limit_factor = SOFT_JOINT_POS_LIMIT_FACTOR
         enable_keyboard_commands = True
 
     class robot:
@@ -294,7 +303,30 @@ class RealLiteMujocoRunner:
         self.gait_cycle = self.cfg.robot.gait_cycle
         self.phase_ratio = np.array([self.cfg.robot.gait_air_ratio_l, self.cfg.robot.gait_air_ratio_r])
         self.phase_offset = np.array([self.cfg.robot.gait_phase_offset_l, self.cfg.robot.gait_phase_offset_r])
-        self.command_vel = self.initial_command_vel.copy()
+        command_ranges = getattr(self.cfg, "command_ranges", TASK_COMMAND_RANGES["walk_real_lite"])
+        self.command_lower = np.asarray(
+            [
+                command_ranges["lin_vel_x"][0],
+                command_ranges["lin_vel_y"][0],
+                command_ranges["ang_vel_z"][0],
+            ],
+            dtype=np.float64,
+        )
+        self.command_upper = np.asarray(
+            [
+                command_ranges["lin_vel_x"][1],
+                command_ranges["lin_vel_y"][1],
+                command_ranges["ang_vel_z"][1],
+            ],
+            dtype=np.float64,
+        )
+        self.command_vel = np.clip(self.initial_command_vel.copy(), self.command_lower, self.command_upper)
+        if not np.allclose(self.command_vel, self.initial_command_vel):
+            print(
+                "[WARN] Clipped initial command velocity to training command range: "
+                f"{self.initial_command_vel} -> {self.command_vel}"
+            )
+        self.obs_scales = dict(getattr(self.cfg, "obs_scales", DEFAULT_OBS_SCALES))
         self.obs_history = np.zeros(
             (self.cfg.sim.num_obs_per_step * self.cfg.sim.actor_obs_history_length,), dtype=np.float32
         )
@@ -306,6 +338,21 @@ class RealLiteMujocoRunner:
         self.vel_sensor_joint_name_to_idx = {name: idx for idx, name in enumerate(self.joint_vel_sensor_names)}
         self.mujoco_to_isaac_idx = [self.sensor_joint_name_to_idx[name] for name in ISAAC_POLICY_ORDER]
         self.mujoco_vel_to_isaac_idx = [self.vel_sensor_joint_name_to_idx[name] for name in ISAAC_POLICY_ORDER]
+        self.policy_joint_ids = np.asarray(
+            [mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, name) for name in ISAAC_POLICY_ORDER],
+            dtype=np.int32,
+        )
+        hard_joint_ranges = np.asarray(self.model.jnt_range[self.policy_joint_ids], dtype=np.float64)
+        hard_joint_mid = np.mean(hard_joint_ranges, axis=1)
+        hard_joint_half = (
+            0.5
+            * (hard_joint_ranges[:, 1] - hard_joint_ranges[:, 0])
+            * float(self.cfg.sim.soft_joint_pos_limit_factor)
+        )
+        self.soft_joint_lower = hard_joint_mid - hard_joint_half
+        self.soft_joint_upper = hard_joint_mid + hard_joint_half
+        self.last_policy_target = self.default_dof_pos.copy()
+        self.last_clamped_policy_target = self.default_dof_pos.copy()
 
         if len(self.actuator_joint_names) != self.cfg.sim.num_action:
             raise ValueError(
@@ -368,17 +415,19 @@ class RealLiteMujocoRunner:
     def get_obs(self) -> np.ndarray:
         self.dof_pos = np.asarray(self.data.sensordata[self.joint_pos_sensor_adr], dtype=np.float64)
         self.dof_vel = np.asarray(self.data.sensordata[self.joint_vel_sensor_adr], dtype=np.float64)
+        command = np.clip(self.command_vel, self.command_lower, self.command_upper)
         obs = np.concatenate(
             [
-                self.data.sensor("angular-velocity").data.astype(np.double),
+                self.data.sensor("angular-velocity").data.astype(np.double) * self.obs_scales["ang_vel"],
                 self.quat_rotate_inverse(
                     self.data.sensor("orientation").data[[1, 2, 3, 0]].astype(np.double),
                     np.array([0, 0, -1], dtype=np.double),
-                ),
-                self.command_vel,
-                (self.dof_pos - self.default_dof_pos)[self.mujoco_to_isaac_idx],
-                self.dof_vel[self.mujoco_vel_to_isaac_idx],
-                np.clip(self.action, -self.cfg.sim.clip_actions, self.cfg.sim.clip_actions),
+                )
+                * self.obs_scales["projected_gravity"],
+                command * self.obs_scales["commands"],
+                (self.dof_pos - self.default_dof_pos)[self.mujoco_to_isaac_idx] * self.obs_scales["joint_pos"],
+                self.dof_vel[self.mujoco_vel_to_isaac_idx] * self.obs_scales["joint_vel"],
+                np.clip(self.action, -self.cfg.sim.clip_actions, self.cfg.sim.clip_actions) * self.obs_scales["actions"],
                 np.sin(2 * np.pi * self.gait_phase),
                 np.cos(2 * np.pi * self.gait_phase),
                 self.phase_ratio,
@@ -395,14 +444,15 @@ class RealLiteMujocoRunner:
         return np.clip(self.obs_history, -self.cfg.sim.clip_observations, self.cfg.sim.clip_observations)
 
     def position_control(self) -> np.ndarray:
-        policy_targets = self.action * self.cfg.sim.action_scale + self.default_dof_pos
-        actuator_targets = np.empty_like(policy_targets)
-        actuator_targets[self.isaac_to_mujoco_actuator_idx] = policy_targets
+        self.last_policy_target = self.action * self.cfg.sim.action_scale + self.default_dof_pos
+        self.last_clamped_policy_target = np.clip(self.last_policy_target, self.soft_joint_lower, self.soft_joint_upper)
+        actuator_targets = np.empty_like(self.last_clamped_policy_target)
+        actuator_targets[self.isaac_to_mujoco_actuator_idx] = self.last_clamped_policy_target
         return actuator_targets
 
     def adjust_command_vel(self, idx: int, increment: float):
         self.command_vel[idx] += increment
-        self.command_vel[idx] = np.clip(self.command_vel[idx], -1.0, 1.0)
+        self.command_vel[idx] = np.clip(self.command_vel[idx], self.command_lower[idx], self.command_upper[idx])
 
     def setup_keyboard_listener(self):
         if not self.cfg.sim.enable_keyboard_commands or self.viewer is None:
@@ -488,6 +538,8 @@ class RealLiteMujocoRunner:
             "joint_pos_isaac": self.dof_pos[self.mujoco_to_isaac_idx].astype(np.float64).copy(),
             "joint_vel_isaac": self.dof_vel[self.mujoco_vel_to_isaac_idx].astype(np.float64).copy(),
             "action": self.action.astype(np.float64).copy(),
+            "policy_target_isaac": self.last_policy_target.astype(np.float64).copy(),
+            "clamped_target_isaac": self.last_clamped_policy_target.astype(np.float64).copy(),
             "ctrl": np.asarray(self.data.ctrl, dtype=np.float64).copy(),
             "obs_step": self.latest_obs_step.astype(np.float32).copy(),
         }
@@ -567,6 +619,8 @@ def build_cfg(task_name: str, duration: float, enable_keyboard_commands: bool) -
     cfg = RealLiteSim2SimCfg()
     cfg.sim.sim_duration = duration
     cfg.sim.enable_keyboard_commands = enable_keyboard_commands and task_name != "upper_body_real_lite"
+    cfg.command_ranges = TASK_COMMAND_RANGES[task_name]
+    cfg.obs_scales = dict(DEFAULT_OBS_SCALES)
     preset = TASK_PRESETS[task_name]
     cfg.robot.gait_air_ratio_l = preset["gait_air_ratio_l"]
     cfg.robot.gait_air_ratio_r = preset["gait_air_ratio_r"]

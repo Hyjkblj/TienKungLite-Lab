@@ -4,6 +4,7 @@ import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets.articulation import ArticulationCfg
 
+from ...alignment_config import SOFT_JOINT_POS_LIMIT_FACTOR
 from .. import resolve_real_lite_asset_root
 from ...constants import DEFAULT_JOINT_POS
 
@@ -31,7 +32,7 @@ REAL_LITE_ARTICULATION_CFG = ArticulationCfg(
         joint_pos=dict(DEFAULT_JOINT_POS),
         joint_vel={".*": 0.0},
     ),
-    soft_joint_pos_limit_factor=0.9,
+    soft_joint_pos_limit_factor=SOFT_JOINT_POS_LIMIT_FACTOR,
     actuators={
         "legs": ImplicitActuatorCfg(
             joint_names_expr=[
