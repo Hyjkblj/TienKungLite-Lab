@@ -60,6 +60,7 @@ from real_lite_lab.alignment_config import (
 from real_lite_lab.joint_order import build_target_order_indices
 from real_lite_lab.mjcf_mesh_fallback import build_mesh_safe_model, ensure_offscreen_framebuffer_size
 from real_lite_lab.mujoco_state_init import apply_default_joint_state, snap_root_height_to_ground
+from real_lite_lab.standing_pose_overrides import apply_symmetric_standing_pitch_offsets
 from real_lite_lab.mujoco_standing_diagnostics import (
     DEFAULT_SUPPORT_GEOM_NAMES,
     collect_standing_diagnostics,
@@ -288,6 +289,9 @@ class RealLiteMujocoRunner:
         lock_arms: bool = False,
         ground_clearance: float = 1e-4,
         settle_steps: int = 0,
+        hip_pitch_offset: float = 0.0,
+        knee_pitch_offset: float = 0.0,
+        ankle_pitch_offset: float = 0.0,
         hip_pitch_kp_scale: float = 1.0,
         hip_pitch_kv_scale: float = 1.0,
         knee_pitch_kp_scale: float = 1.0,
@@ -338,6 +342,9 @@ class RealLiteMujocoRunner:
         self.lock_arms = lock_arms
         self.ground_clearance = float(ground_clearance)
         self.settle_steps = max(0, int(settle_steps))
+        self.hip_pitch_offset = float(hip_pitch_offset)
+        self.knee_pitch_offset = float(knee_pitch_offset)
+        self.ankle_pitch_offset = float(ankle_pitch_offset)
         self.hip_pitch_kp_scale = float(hip_pitch_kp_scale)
         self.hip_pitch_kv_scale = float(hip_pitch_kv_scale)
         self.knee_pitch_kp_scale = float(knee_pitch_kp_scale)
@@ -407,6 +414,13 @@ class RealLiteMujocoRunner:
         self.dof_vel = np.zeros(self.cfg.sim.num_action)
         self.action = np.zeros(self.cfg.sim.num_action)
         self.default_dof_pos = np.array(DEFAULT_DOF_POS, dtype=np.float64)
+        self.default_dof_pos = apply_symmetric_standing_pitch_offsets(
+            self.default_dof_pos,
+            ISAAC_POLICY_ORDER,
+            hip_pitch_offset=self.hip_pitch_offset,
+            knee_pitch_offset=self.knee_pitch_offset,
+            ankle_pitch_offset=self.ankle_pitch_offset,
+        )
         if self.default_dof_pos.shape[0] != self.cfg.sim.num_action:
             raise ValueError(
                 f"default_dof_pos size mismatch: expected {self.cfg.sim.num_action}, got {self.default_dof_pos.shape[0]}."
@@ -532,6 +546,9 @@ class RealLiteMujocoRunner:
             f"total={total_foot_load:.2f}N, expected_weight={self.expected_total_weight:.2f}N, "
             f"load_ratio={foot_load_ratio:.3f}, ground_clearance={self.ground_clearance:+.4f}m, "
             f"settle_steps={self.settle_steps}, "
+            f"hip_pitch_offset={self.hip_pitch_offset:+.4f}rad, "
+            f"knee_pitch_offset={self.knee_pitch_offset:+.4f}rad, "
+            f"ankle_pitch_offset={self.ankle_pitch_offset:+.4f}rad, "
             f"hip_pitch_kp_scale={self.hip_pitch_kp_scale:.3f}, hip_pitch_kv_scale={self.hip_pitch_kv_scale:.3f}, "
             f"knee_pitch_kp_scale={self.knee_pitch_kp_scale:.3f}, knee_pitch_kv_scale={self.knee_pitch_kv_scale:.3f}, "
             f"ankle_pitch_kp_scale={self.ankle_pitch_kp_scale:.3f}, ankle_pitch_kv_scale={self.ankle_pitch_kv_scale:.3f}, "
@@ -876,6 +893,24 @@ def main():
         help="Optional number of MuJoCo simulation steps to run in hold mode before trace/video collection starts.",
     )
     parser.add_argument(
+        "--hip_pitch_offset",
+        type=float,
+        default=0.0,
+        help="Add this symmetric offset in radians to both hip_pitch joints in the standing default pose.",
+    )
+    parser.add_argument(
+        "--knee_pitch_offset",
+        type=float,
+        default=0.0,
+        help="Add this symmetric offset in radians to both knee_pitch joints in the standing default pose.",
+    )
+    parser.add_argument(
+        "--ankle_pitch_offset",
+        type=float,
+        default=0.0,
+        help="Add this symmetric offset in radians to both ankle_pitch joints in the standing default pose.",
+    )
+    parser.add_argument(
         "--hip_pitch_kp_scale",
         type=float,
         default=1.0,
@@ -970,6 +1005,9 @@ def main():
         lock_arms=args.lock_arms,
         ground_clearance=args.ground_clearance,
         settle_steps=args.settle_steps,
+        hip_pitch_offset=args.hip_pitch_offset,
+        knee_pitch_offset=args.knee_pitch_offset,
+        ankle_pitch_offset=args.ankle_pitch_offset,
         hip_pitch_kp_scale=args.hip_pitch_kp_scale,
         hip_pitch_kv_scale=args.hip_pitch_kv_scale,
         knee_pitch_kp_scale=args.knee_pitch_kp_scale,
