@@ -57,6 +57,11 @@ from real_lite_lab.alignment_config import (
 from real_lite_lab.joint_order import build_target_order_indices
 from real_lite_lab.mjcf_mesh_fallback import build_mesh_safe_model, ensure_offscreen_framebuffer_size
 from real_lite_lab.mujoco_state_init import apply_default_joint_state, snap_root_height_to_ground
+from real_lite_lab.mujoco_standing_diagnostics import (
+    DEFAULT_SUPPORT_GEOM_NAMES,
+    collect_standing_diagnostics,
+    format_standing_diagnostics_summary,
+)
 from real_lite_lab.render_camera import camera_preset_names, get_camera_preset
 
 
@@ -364,6 +369,8 @@ class RealLiteMujocoRunner:
             [policy_joint_name_to_idx[name] for name in (*LEFT_ARM_JOINT_NAMES, *RIGHT_ARM_JOINT_NAMES)],
             dtype=np.int64,
         )
+        self.support_geom_name_to_id = self._support_geom_name_to_id(DEFAULT_SUPPORT_GEOM_NAMES)
+        self.initial_standing_diagnostics: dict[str, np.ndarray | float] | None = None
 
     def _joint_sensor_layout(self, sensor_type: int) -> tuple[list[str], np.ndarray]:
         joint_names: list[str] = []
@@ -384,6 +391,23 @@ class RealLiteMujocoRunner:
             )
         return joint_names, np.asarray(sensor_adr, dtype=np.int32)
 
+    def _support_geom_name_to_id(self, support_geom_names: tuple[str, ...]) -> dict[str, int]:
+        support_geom_name_to_id: dict[str, int] = {}
+        missing_geom_names: list[str] = []
+        for geom_name in support_geom_names:
+            geom_id = int(mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, geom_name))
+            if geom_id < 0:
+                missing_geom_names.append(geom_name)
+                continue
+            support_geom_name_to_id[geom_name] = geom_id
+
+        if missing_geom_names:
+            raise ValueError(f"Support geoms not found in MuJoCo model: {', '.join(missing_geom_names)}")
+        return support_geom_name_to_id
+
+    def _collect_standing_diagnostics(self) -> dict[str, np.ndarray | float]:
+        return collect_standing_diagnostics(self.model, self.data, self.support_geom_name_to_id)
+
     def _initialize_sim_state(self) -> None:
         apply_default_joint_state(
             model=self.model,
@@ -398,6 +422,12 @@ class RealLiteMujocoRunner:
             print(f"[INFO] Adjusted initial root height by {root_height_shift:+.4f} m to place support geoms on the floor.")
         self.data.ctrl[:] = self.position_control()
         mujoco.mj_forward(self.model, self.data)
+        self.initial_standing_diagnostics = self._collect_standing_diagnostics()
+        for line in format_standing_diagnostics_summary(
+            self.initial_standing_diagnostics,
+            support_names=tuple(self.support_geom_name_to_id.keys()),
+        ):
+            print(line)
 
     def quat_rotate_inverse(self, q: np.ndarray, v: np.ndarray) -> np.ndarray:
         q_w = q[-1]
@@ -543,6 +573,23 @@ class RealLiteMujocoRunner:
             "ctrl": np.asarray(self.data.ctrl, dtype=np.float64).copy(),
             "obs_step": self.latest_obs_step.astype(np.float32).copy(),
         }
+        standing_diagnostics = self._collect_standing_diagnostics()
+        record.update(
+            {
+                "com_world": np.asarray(standing_diagnostics["com_world"], dtype=np.float64).copy(),
+                "support_center_xy": np.asarray(standing_diagnostics["support_center_xy"], dtype=np.float64).copy(),
+                "support_offset_xy": np.asarray(standing_diagnostics["support_offset_xy"], dtype=np.float64).copy(),
+                "support_bounds_min_xy": np.asarray(standing_diagnostics["support_bounds_min_xy"], dtype=np.float64).copy(),
+                "support_bounds_max_xy": np.asarray(standing_diagnostics["support_bounds_max_xy"], dtype=np.float64).copy(),
+                "support_extents_xy": np.asarray(standing_diagnostics["support_extents_xy"], dtype=np.float64).copy(),
+                "support_margin": float(standing_diagnostics["support_margin"]),
+                "foot_centers_world": np.asarray(standing_diagnostics["foot_centers_world"], dtype=np.float64).copy(),
+                "foot_contact_counts": np.asarray(standing_diagnostics["foot_contact_counts"], dtype=np.int32).copy(),
+                "foot_normal_forces": np.asarray(standing_diagnostics["foot_normal_forces"], dtype=np.float64).copy(),
+                "double_support": int(standing_diagnostics["double_support"]),
+                "left_load_share": float(standing_diagnostics["left_load_share"]),
+            }
+        )
         self.trace_records.append(record)
 
     def _flush_trace(self) -> None:
