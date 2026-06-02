@@ -46,7 +46,7 @@ from real_lite_lab.constants import (
 )
 from real_lite_lab.joint_order import build_target_order_indices
 from real_lite_lab.mjcf_mesh_fallback import build_mesh_safe_model, ensure_offscreen_framebuffer_size
-from real_lite_lab.mujoco_state_init import apply_default_joint_state
+from real_lite_lab.mujoco_state_init import apply_default_joint_state, snap_root_height_to_ground
 from real_lite_lab.render_camera import camera_preset_names, get_camera_preset
 
 
@@ -336,6 +336,10 @@ class RealLiteMujocoRunner:
             default_joint_pos=self.default_dof_pos,
             joint_name_to_id=lambda joint_name: mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_name),
         )
+        mujoco.mj_forward(self.model, self.data)
+        root_height_shift = snap_root_height_to_ground(model=self.model, data=self.data)
+        if abs(root_height_shift) > 1e-5:
+            print(f"[INFO] Adjusted initial root height by {root_height_shift:+.4f} m to place support geoms on the floor.")
         self.data.ctrl[:] = self.position_control()
         mujoco.mj_forward(self.model, self.data)
 
