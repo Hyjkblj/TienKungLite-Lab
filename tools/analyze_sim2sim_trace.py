@@ -27,6 +27,21 @@ def _first_index(mask: np.ndarray) -> int | None:
     return int(indices[0])
 
 
+def _first_run_index(mask: np.ndarray, run_length: int) -> int | None:
+    if run_length <= 1:
+        return _first_index(mask)
+
+    active_length = 0
+    for index, value in enumerate(np.asarray(mask, dtype=bool)):
+        if value:
+            active_length += 1
+            if active_length >= run_length:
+                return int(index - run_length + 1)
+        else:
+            active_length = 0
+    return None
+
+
 def _format_event(label: str, index: int | None, times: np.ndarray) -> str:
     if index is None:
         return f"{label}: not reached"
@@ -39,7 +54,14 @@ def _top_joint_table(values: np.ndarray, *, topk: int = 5) -> str:
     return ", ".join(f"{POLICY_JOINT_NAMES[idx]}={values[idx]:+.4f}" for idx in order)
 
 
-def analyze_trace(trace_path: Path, *, height_drop_threshold: float, tilt_threshold_deg: float) -> list[str]:
+def analyze_trace(
+    trace_path: Path,
+    *,
+    height_drop_threshold: float,
+    tilt_threshold_deg: float,
+    support_force_threshold: float,
+    support_hold_steps: int,
+) -> list[str]:
     trace = _load_trace(trace_path)
 
     required = (
@@ -85,6 +107,11 @@ def analyze_trace(trace_path: Path, *, height_drop_threshold: float, tilt_thresh
     severe_tilt_idx = _first_index(tilt_deg >= 45.0)
     support_loss_idx = _first_index(support_margin < 0.0) if support_margin is not None else None
     single_support_idx = _first_index(double_support == 0) if double_support is not None else None
+    loaded_double_support = None
+    loaded_single_support_idx = None
+    if foot_normal_forces is not None:
+        loaded_double_support = np.all(foot_normal_forces >= support_force_threshold, axis=1)
+        loaded_single_support_idx = _first_run_index(~loaded_double_support, support_hold_steps)
 
     lines = [
         f"trace: {trace_path}",
@@ -127,8 +154,21 @@ def analyze_trace(trace_path: Path, *, height_drop_threshold: float, tilt_thresh
 
     if double_support is not None:
         double_support_ratio = float(np.mean(double_support != 0))
-        lines.append(f"double_support_ratio: {double_support_ratio:.3f}")
-        lines.append(_format_event("double support lost", single_support_idx, times))
+        lines.append(f"double_support_ratio(contact-count): {double_support_ratio:.3f}")
+        lines.append(_format_event("double support lost(contact-count)", single_support_idx, times))
+
+    if loaded_double_support is not None:
+        loaded_double_support_ratio = float(np.mean(loaded_double_support))
+        lines.append(
+            f"loaded_double_support_ratio(>={support_force_threshold:.1f}N per foot): {loaded_double_support_ratio:.3f}"
+        )
+        lines.append(
+            _format_event(
+                f"loaded double support lost for {support_hold_steps} frames",
+                loaded_single_support_idx,
+                times,
+            )
+        )
 
     if "action" in trace:
         action = np.asarray(trace["action"], dtype=np.float64)
@@ -171,6 +211,7 @@ def analyze_trace(trace_path: Path, *, height_drop_threshold: float, tilt_thresh
         ("target_clip_event", target_clip_event_idx),
         ("support_loss", support_loss_idx),
         ("single_support", single_support_idx),
+        ("loaded_single_support", loaded_single_support_idx),
     ):
         if index is not None:
             event_indices.append((label, index))
@@ -222,6 +263,18 @@ def main() -> None:
         default=20.0,
         help="Mark the first time the body tilt reaches at least this many degrees.",
     )
+    parser.add_argument(
+        "--support_force_threshold",
+        type=float,
+        default=20.0,
+        help="Treat a foot as loaded only when its normal force reaches at least this threshold in Newtons.",
+    )
+    parser.add_argument(
+        "--support_hold_steps",
+        type=int,
+        default=3,
+        help="Require at least this many consecutive frames before reporting loaded double-support loss.",
+    )
     args = parser.parse_args()
 
     trace_path = Path(args.trace).resolve()
@@ -232,6 +285,8 @@ def main() -> None:
         trace_path,
         height_drop_threshold=args.height_drop_threshold,
         tilt_threshold_deg=args.tilt_threshold_deg,
+        support_force_threshold=args.support_force_threshold,
+        support_hold_steps=args.support_hold_steps,
     ):
         print(line)
 
