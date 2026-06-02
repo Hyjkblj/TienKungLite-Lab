@@ -53,6 +53,10 @@ ELBOW_LINK_NAMES = ["elbow_l_link", "elbow_r_link"]
 POLICY_JOINT_NAMES = (
     LEFT_LEG_JOINT_NAMES + RIGHT_LEG_JOINT_NAMES + LEFT_ARM_JOINT_NAMES + RIGHT_ARM_JOINT_NAMES
 )
+HIP_PITCH_JOINT_NAMES = tuple(name for name in POLICY_JOINT_NAMES if "hip_pitch" in name)
+KNEE_PITCH_JOINT_NAMES = tuple(name for name in POLICY_JOINT_NAMES if "knee_pitch" in name)
+ANKLE_PITCH_JOINT_NAMES = tuple(name for name in POLICY_JOINT_NAMES if "ankle_pitch" in name)
+ANKLE_ROLL_JOINT_NAMES = tuple(name for name in POLICY_JOINT_NAMES if "ankle_roll" in name)
 POLICY_JOINT_COUNT = len(POLICY_JOINT_NAMES)
 
 DEFAULT_JOINT_POS = {

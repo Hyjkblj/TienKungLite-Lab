@@ -38,7 +38,6 @@ if str(PIPELINE_DIR) not in sys.path:
     sys.path.insert(0, str(PIPELINE_DIR))
 
 from real_lite_lab.constants import (
-    ANKLE_JOINT_NAMES,
     DEFAULT_DOF_POS,
     LEFT_ARM_JOINT_NAMES,
     MJCF_DIR,
@@ -49,6 +48,7 @@ from real_lite_lab.constants import (
     TASK_NAMES,
     TASK_PRESETS,
 )
+from real_lite_lab.actuator_scale_overrides import build_actuator_scale_overrides
 from real_lite_lab.alignment_config import (
     DEFAULT_ACTION_SCALE,
     DEFAULT_CLIP_ACTIONS,
@@ -160,12 +160,6 @@ def _apply_actuator_scales_to_xml(
         print(f"[INFO]   {line}")
     print(f"[INFO] Using actuator-scaled model: {output_path}")
     return output_path
-
-
-def _joint_name_scales(joint_names: tuple[str, ...], scale: float) -> dict[str, float]:
-    if abs(float(scale) - 1.0) <= 1e-12:
-        return {}
-    return {joint_name: float(scale) for joint_name in joint_names}
 
 
 class RealLiteSim2SimCfg:
@@ -294,24 +288,30 @@ class RealLiteMujocoRunner:
         lock_arms: bool = False,
         ground_clearance: float = 1e-4,
         settle_steps: int = 0,
+        hip_pitch_kp_scale: float = 1.0,
+        hip_pitch_kv_scale: float = 1.0,
+        knee_pitch_kp_scale: float = 1.0,
+        knee_pitch_kv_scale: float = 1.0,
         ankle_pitch_kp_scale: float = 1.0,
         ankle_pitch_kv_scale: float = 1.0,
         ankle_roll_kp_scale: float = 1.0,
         ankle_roll_kv_scale: float = 1.0,
     ):
         self.cfg = cfg
-        ankle_pitch_joint_names = tuple(joint_name for joint_name in ANKLE_JOINT_NAMES if "ankle_pitch" in joint_name)
-        ankle_roll_joint_names = tuple(joint_name for joint_name in ANKLE_JOINT_NAMES if "ankle_roll" in joint_name)
+        joint_kp_scales, joint_kv_scales = build_actuator_scale_overrides(
+            hip_pitch_kp_scale=hip_pitch_kp_scale,
+            hip_pitch_kv_scale=hip_pitch_kv_scale,
+            knee_pitch_kp_scale=knee_pitch_kp_scale,
+            knee_pitch_kv_scale=knee_pitch_kv_scale,
+            ankle_pitch_kp_scale=ankle_pitch_kp_scale,
+            ankle_pitch_kv_scale=ankle_pitch_kv_scale,
+            ankle_roll_kp_scale=ankle_roll_kp_scale,
+            ankle_roll_kv_scale=ankle_roll_kv_scale,
+        )
         actuator_scale_model_path = _apply_actuator_scales_to_xml(
             model_path,
-            joint_kp_scales=(
-                _joint_name_scales(ankle_pitch_joint_names, ankle_pitch_kp_scale)
-                | _joint_name_scales(ankle_roll_joint_names, ankle_roll_kp_scale)
-            ),
-            joint_kv_scales=(
-                _joint_name_scales(ankle_pitch_joint_names, ankle_pitch_kv_scale)
-                | _joint_name_scales(ankle_roll_joint_names, ankle_roll_kv_scale)
-            ),
+            joint_kp_scales=joint_kp_scales,
+            joint_kv_scales=joint_kv_scales,
         )
         self.model = self._load_model_with_mesh_fallback(actuator_scale_model_path)
         self.model.opt.timestep = self.cfg.sim.dt
@@ -338,6 +338,10 @@ class RealLiteMujocoRunner:
         self.lock_arms = lock_arms
         self.ground_clearance = float(ground_clearance)
         self.settle_steps = max(0, int(settle_steps))
+        self.hip_pitch_kp_scale = float(hip_pitch_kp_scale)
+        self.hip_pitch_kv_scale = float(hip_pitch_kv_scale)
+        self.knee_pitch_kp_scale = float(knee_pitch_kp_scale)
+        self.knee_pitch_kv_scale = float(knee_pitch_kv_scale)
         self.ankle_pitch_kp_scale = float(ankle_pitch_kp_scale)
         self.ankle_pitch_kv_scale = float(ankle_pitch_kv_scale)
         self.ankle_roll_kp_scale = float(ankle_roll_kp_scale)
@@ -528,6 +532,8 @@ class RealLiteMujocoRunner:
             f"total={total_foot_load:.2f}N, expected_weight={self.expected_total_weight:.2f}N, "
             f"load_ratio={foot_load_ratio:.3f}, ground_clearance={self.ground_clearance:+.4f}m, "
             f"settle_steps={self.settle_steps}, "
+            f"hip_pitch_kp_scale={self.hip_pitch_kp_scale:.3f}, hip_pitch_kv_scale={self.hip_pitch_kv_scale:.3f}, "
+            f"knee_pitch_kp_scale={self.knee_pitch_kp_scale:.3f}, knee_pitch_kv_scale={self.knee_pitch_kv_scale:.3f}, "
             f"ankle_pitch_kp_scale={self.ankle_pitch_kp_scale:.3f}, ankle_pitch_kv_scale={self.ankle_pitch_kv_scale:.3f}, "
             f"ankle_roll_kp_scale={self.ankle_roll_kp_scale:.3f}, ankle_roll_kv_scale={self.ankle_roll_kv_scale:.3f}"
         )
@@ -870,6 +876,30 @@ def main():
         help="Optional number of MuJoCo simulation steps to run in hold mode before trace/video collection starts.",
     )
     parser.add_argument(
+        "--hip_pitch_kp_scale",
+        type=float,
+        default=1.0,
+        help="Multiply the MuJoCo hip_pitch actuator kp values by this factor before loading the model.",
+    )
+    parser.add_argument(
+        "--hip_pitch_kv_scale",
+        type=float,
+        default=1.0,
+        help="Multiply the MuJoCo hip_pitch actuator kv values by this factor before loading the model.",
+    )
+    parser.add_argument(
+        "--knee_pitch_kp_scale",
+        type=float,
+        default=1.0,
+        help="Multiply the MuJoCo knee_pitch actuator kp values by this factor before loading the model.",
+    )
+    parser.add_argument(
+        "--knee_pitch_kv_scale",
+        type=float,
+        default=1.0,
+        help="Multiply the MuJoCo knee_pitch actuator kv values by this factor before loading the model.",
+    )
+    parser.add_argument(
         "--ankle_pitch_kp_scale",
         type=float,
         default=1.0,
@@ -940,6 +970,10 @@ def main():
         lock_arms=args.lock_arms,
         ground_clearance=args.ground_clearance,
         settle_steps=args.settle_steps,
+        hip_pitch_kp_scale=args.hip_pitch_kp_scale,
+        hip_pitch_kv_scale=args.hip_pitch_kv_scale,
+        knee_pitch_kp_scale=args.knee_pitch_kp_scale,
+        knee_pitch_kv_scale=args.knee_pitch_kv_scale,
         ankle_pitch_kp_scale=args.ankle_pitch_kp_scale,
         ankle_pitch_kv_scale=args.ankle_pitch_kv_scale,
         ankle_roll_kp_scale=args.ankle_roll_kp_scale,
