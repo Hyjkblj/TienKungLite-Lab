@@ -48,6 +48,18 @@ def _format_event(label: str, index: int | None, times: np.ndarray) -> str:
     return f"{label}: step={index}, time={times[index]:.3f}s"
 
 
+def _detect_fixed_root_markers(physics_usd_path: Path) -> dict[str, bool]:
+    if not physics_usd_path.is_file():
+        return {"physics_usd_exists": False, "has_root_joint": False, "has_fixed_token": False}
+
+    usd_bytes = physics_usd_path.read_bytes()
+    return {
+        "physics_usd_exists": True,
+        "has_root_joint": b"root_joint" in usd_bytes,
+        "has_fixed_token": b"Fixed" in usd_bytes,
+    }
+
+
 def summarize_standing_trace(
     trace: dict[str, np.ndarray],
     *,
@@ -123,6 +135,15 @@ def summarize_standing_trace(
         f"max_imbalance={np.abs(finite_left_load_share[max_left_load_imbalance_idx] - 0.5):.3f} at "
         f"{times[max_left_load_imbalance_idx]:.3f}s"
     )
+
+    if "feet_pos_w" in trace:
+        feet_pos_w = np.asarray(trace["feet_pos_w"], dtype=np.float64)
+        foot_z = feet_pos_w[:, :, 2]
+        lines.append(
+            f"feet_z_w: start=({foot_z[0, 0]:.4f}, {foot_z[0, 1]:.4f}), "
+            f"end=({foot_z[-1, 0]:.4f}, {foot_z[-1, 1]:.4f}), "
+            f"min=({np.min(foot_z[:, 0]):.4f}, {np.min(foot_z[:, 1]):.4f})"
+        )
 
     for label, index in (
         ("termination_contact", termination_contact_idx),
@@ -210,6 +231,8 @@ def main() -> None:
     env = None
     try:
         env = env_class(env_cfg, args_cli.headless)
+        physics_usd_path = Path(env.robot.cfg.spawn.usd_path).resolve().parent / "configuration" / "humanoid_publish_physics.usd"
+        fixed_root_markers = _detect_fixed_root_markers(physics_usd_path)
 
         standing_target = apply_symmetric_standing_pitch_targets(
             DEFAULT_DOF_POS,
@@ -226,19 +249,23 @@ def main() -> None:
         import torch
 
         standing_target_tensor = torch.tensor(standing_target, dtype=joint_position_targets.dtype, device=env.device)
-        joint_position_targets[:, env.policy_joint_ids] = standing_target_tensor.unsqueeze(0).repeat(env.num_envs, 1)
+        standing_target_batch = standing_target_tensor.unsqueeze(0).repeat(env.num_envs, 1)
+        joint_position_targets[:, env.policy_joint_ids] = standing_target_batch
+
+        # Make zero-action env.step() hold the diagnostic standing target instead of the training default.
+        env.default_joint_pos_policy = standing_target_batch.clone()
+        env.robot.data.default_joint_pos[:, env.policy_joint_ids] = standing_target_batch
+        env.robot.data.default_joint_vel[:, env.policy_joint_ids] = 0.0
 
         env.robot.write_joint_position_to_sim(joint_position_targets)
         env.robot.write_joint_velocity_to_sim(joint_velocity_targets)
         env.scene.write_data_to_sim()
         env.sim.forward()
 
-        settle_physics_steps = max(0, int(round(args_cli.settle_time / env.physics_dt)))
-        for _ in range(settle_physics_steps):
-            env.robot.set_joint_position_target(joint_position_targets)
-            env.scene.write_data_to_sim()
-            env.sim.step(render=False)
-            env.scene.update(dt=env.physics_dt)
+        settle_policy_steps = max(0, int(round(args_cli.settle_time / env.step_dt)))
+        zero_action = torch.zeros((env.num_envs, env.num_actions), dtype=torch.float32, device=env.device)
+        for _ in range(settle_policy_steps):
+            env.step(zero_action)
 
         total_policy_steps = max(1, int(round(args_cli.duration / env.step_dt)))
         trace: dict[str, list[np.ndarray | float | bool]] = {
@@ -249,41 +276,21 @@ def main() -> None:
             "joint_vel_policy": [],
             "joint_pos_error_policy": [],
             "foot_normal_forces": [],
+            "feet_pos_w": [],
             "termination_contact": [],
         }
 
         for step_idx in range(total_policy_steps):
-            for _ in range(env.cfg.sim.decimation):
-                env.robot.set_joint_position_target(joint_position_targets)
-                env.scene.write_data_to_sim()
-                env.sim.step(render=False)
-                env.scene.update(dt=env.physics_dt)
+            _, _, reset_buf, _ = env.step(zero_action)
 
             current_time = (step_idx + 1) * env.step_dt
             root_pos = env.robot.data.root_pos_w[0].detach().cpu().numpy().copy()
             projected_gravity = env.robot.data.projected_gravity_b[0].detach().cpu().numpy().copy()
             joint_pos = env.robot.data.joint_pos[0, env.policy_joint_ids].detach().cpu().numpy().copy()
             joint_vel = env.robot.data.joint_vel[0, env.policy_joint_ids].detach().cpu().numpy().copy()
-            foot_forces = (
-                np.linalg.norm(
-                    env.contact_sensor.data.net_forces_w[0, env.feet_cfg.body_ids, :3].detach().cpu().numpy(),
-                    axis=-1,
-                )
-                .astype(np.float64)
-                .copy()
-            )
-            termination_contact = bool(
-                torch.any(
-                    torch.max(
-                        torch.norm(
-                            env.contact_sensor.data.net_forces_w_history[:, :, env.termination_contact_cfg.body_ids, :3],
-                            dim=-1,
-                        ),
-                        dim=1,
-                    )[0][0]
-                    > 1.0
-                ).item()
-            )
+            foot_forces = env.avg_feet_force_per_step[0].detach().cpu().numpy().astype(np.float64).copy()
+            feet_pos_w = env.robot.data.body_pos_w[0, env.feet_body_ids, :].detach().cpu().numpy().astype(np.float64).copy()
+            termination_contact = bool(reset_buf[0].item())
 
             trace["sim_time"].append(float(current_time))
             trace["root_pos"].append(root_pos)
@@ -292,6 +299,7 @@ def main() -> None:
             trace["joint_vel_policy"].append(joint_vel)
             trace["joint_pos_error_policy"].append((joint_pos - standing_target).astype(np.float64))
             trace["foot_normal_forces"].append(foot_forces)
+            trace["feet_pos_w"].append(feet_pos_w)
             trace["termination_contact"].append(termination_contact)
 
             if termination_contact:
@@ -313,6 +321,18 @@ def main() -> None:
             f"knee_pitch={args_cli.knee_pitch_target if args_cli.knee_pitch_target is not None else 'default'}, "
             f"ankle_pitch={args_cli.ankle_pitch_target if args_cli.ankle_pitch_target is not None else 'default'}"
         )
+        if fixed_root_markers["physics_usd_exists"]:
+            print(
+                "[INFO] Physics USD markers: "
+                f"root_joint={fixed_root_markers['has_root_joint']}, "
+                f"Fixed={fixed_root_markers['has_fixed_token']}, "
+                f"path={physics_usd_path}"
+            )
+            if fixed_root_markers["has_root_joint"] and fixed_root_markers["has_fixed_token"]:
+                print(
+                    "[WARN] Physics USD contains both 'root_joint' and 'Fixed' markers; "
+                    "this Isaac asset may be fixed-root and not directly comparable to MuJoCo free-base standing."
+                )
         for line in summarize_standing_trace(
             stacked_trace,
             height_drop_threshold=args_cli.height_drop_threshold,
@@ -321,6 +341,11 @@ def main() -> None:
             support_hold_steps=args_cli.support_hold_steps,
         ):
             print(line)
+        if float(np.max(np.sum(stacked_trace["foot_normal_forces"], axis=1))) <= 1e-6:
+            print(
+                "[WARN] Foot normal forces stayed at 0 across the rollout; "
+                "this trace likely does not represent grounded stance contact."
+            )
     finally:
         if env is not None:
             close_env = getattr(env, "close", None)
