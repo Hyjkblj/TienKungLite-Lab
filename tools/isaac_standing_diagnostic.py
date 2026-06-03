@@ -167,7 +167,6 @@ def main() -> None:
     parser.add_argument("--hip_pitch_target", type=float, default=None)
     parser.add_argument("--knee_pitch_target", type=float, default=None)
     parser.add_argument("--ankle_pitch_target", type=float, default=None)
-    parser.add_argument("--headless", action="store_true", default=False)
     AppLauncher.add_app_launcher_args(parser)
     args_cli = parser.parse_args()
 
