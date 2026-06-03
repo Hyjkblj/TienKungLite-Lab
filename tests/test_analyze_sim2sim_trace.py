@@ -187,6 +187,66 @@ class AnalyzeSim2SimTraceTests(unittest.TestCase):
         joined = "\n".join(lines)
         self.assertIn("tilt_event top_joint_pos_error: hip_pitch_l_joint=+0.3000", joined)
 
+    def test_extract_trace_metrics_reports_support_offsets(self) -> None:
+        module = load_trace_module()
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trace_path = Path(tmp_dir) / "trace_metrics.npz"
+            num_frames = 3
+            num_joints = 20
+            np.savez_compressed(
+                trace_path,
+                sim_time=np.array([0.0, 0.5, 1.0], dtype=np.float64),
+                root_pos=np.array(
+                    [
+                        [0.0, 0.0, 1.00],
+                        [0.0, 0.0, 0.97],
+                        [0.0, 0.0, 0.90],
+                    ],
+                    dtype=np.float64,
+                ),
+                projected_gravity=np.array(
+                    [
+                        [0.0, 0.0, -1.0],
+                        [0.2, 0.0, -0.98],
+                        [0.8, 0.0, -0.2],
+                    ],
+                    dtype=np.float64,
+                ),
+                angular_velocity=np.zeros((num_frames, 3), dtype=np.float64),
+                joint_vel_isaac=np.zeros((num_frames, num_joints), dtype=np.float64),
+                support_margin=np.array([0.03, 0.01, -0.02], dtype=np.float64),
+                support_offset_xy=np.array(
+                    [
+                        [-0.02, 0.00],
+                        [0.01, 0.00],
+                        [0.09, 0.01],
+                    ],
+                    dtype=np.float64,
+                ),
+                foot_normal_forces=np.array(
+                    [
+                        [100.0, 100.0],
+                        [100.0, 100.0],
+                        [0.0, 100.0],
+                    ],
+                    dtype=np.float64,
+                ),
+                double_support=np.array([1, 1, 0], dtype=np.int32),
+            )
+
+            metrics = module.extract_trace_metrics(
+                trace_path,
+                height_drop_threshold=0.05,
+                tilt_threshold_deg=20.0,
+                support_force_threshold=20.0,
+                support_hold_steps=2,
+            )
+
+        self.assertAlmostEqual(float(metrics["support_loss_time"]), 1.0)
+        self.assertEqual(metrics["support_offset_xy_start"], [-0.02, 0.0])
+        self.assertEqual(metrics["support_offset_xy_at_support_loss"], [0.09, 0.01])
+
 
 if __name__ == "__main__":
     unittest.main()

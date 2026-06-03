@@ -54,6 +54,105 @@ def _top_joint_table(values: np.ndarray, *, topk: int = 5) -> str:
     return ", ".join(f"{POLICY_JOINT_NAMES[idx]}={values[idx]:+.4f}" for idx in order)
 
 
+def extract_trace_metrics(
+    trace_path: Path,
+    *,
+    height_drop_threshold: float,
+    tilt_threshold_deg: float,
+    support_force_threshold: float,
+    support_hold_steps: int,
+) -> dict[str, float | int | list[float] | None]:
+    trace = _load_trace(trace_path)
+
+    required = (
+        "sim_time",
+        "root_pos",
+        "projected_gravity",
+        "angular_velocity",
+        "joint_vel_isaac",
+    )
+    missing = [key for key in required if key not in trace]
+    if missing:
+        raise KeyError(f"Trace file is missing required keys: {', '.join(missing)}")
+
+    times = np.asarray(trace["sim_time"], dtype=np.float64)
+    root_pos = np.asarray(trace["root_pos"], dtype=np.float64)
+    projected_gravity = np.asarray(trace["projected_gravity"], dtype=np.float64)
+    angular_velocity = np.asarray(trace["angular_velocity"], dtype=np.float64)
+    joint_vel = np.asarray(trace["joint_vel_isaac"], dtype=np.float64)
+    support_margin = np.asarray(trace["support_margin"], dtype=np.float64) if "support_margin" in trace else None
+    support_offset_xy = np.asarray(trace["support_offset_xy"], dtype=np.float64) if "support_offset_xy" in trace else None
+    foot_normal_forces = np.asarray(trace["foot_normal_forces"], dtype=np.float64) if "foot_normal_forces" in trace else None
+    double_support = np.asarray(trace["double_support"], dtype=np.int32) if "double_support" in trace else None
+
+    tilt_deg = _tilt_deg_from_projected_gravity(projected_gravity)
+    root_z = root_pos[:, 2]
+    root_xy_disp = np.linalg.norm(root_pos[:, :2] - root_pos[0, :2], axis=1)
+    ang_speed = np.linalg.norm(angular_velocity, axis=1)
+    joint_speed = np.max(np.abs(joint_vel), axis=1)
+
+    min_root_z_idx = int(np.argmin(root_z))
+    max_tilt_idx = int(np.argmax(tilt_deg))
+    max_ang_speed_idx = int(np.argmax(ang_speed))
+    max_joint_speed_idx = int(np.argmax(joint_speed))
+
+    start_root_z = float(root_z[0])
+    drop_event_idx = _first_index(root_z <= start_root_z - height_drop_threshold)
+    tilt_event_idx = _first_index(tilt_deg >= tilt_threshold_deg)
+    severe_tilt_idx = _first_index(tilt_deg >= 45.0)
+    support_loss_idx = _first_index(support_margin < 0.0) if support_margin is not None else None
+    single_support_idx = _first_index(double_support == 0) if double_support is not None else None
+    loaded_single_support_idx = None
+    if foot_normal_forces is not None:
+        loaded_double_support = np.all(foot_normal_forces >= support_force_threshold, axis=1)
+        loaded_single_support_idx = _first_run_index(~loaded_double_support, support_hold_steps)
+
+    metrics: dict[str, float | int | list[float] | None] = {
+        "num_frames": int(len(times)),
+        "duration": float(times[-1]),
+        "root_z_start": float(root_z[0]),
+        "root_z_end": float(root_z[-1]),
+        "root_z_min": float(root_z[min_root_z_idx]),
+        "root_z_min_time": float(times[min_root_z_idx]),
+        "root_xy_disp_end": float(root_xy_disp[-1]),
+        "root_xy_disp_max": float(np.max(root_xy_disp)),
+        "tilt_deg_start": float(tilt_deg[0]),
+        "tilt_deg_end": float(tilt_deg[-1]),
+        "tilt_deg_max": float(tilt_deg[max_tilt_idx]),
+        "tilt_deg_max_time": float(times[max_tilt_idx]),
+        "ang_speed_max": float(ang_speed[max_ang_speed_idx]),
+        "ang_speed_max_time": float(times[max_ang_speed_idx]),
+        "joint_speed_abs_max": float(joint_speed[max_joint_speed_idx]),
+        "joint_speed_abs_max_time": float(times[max_joint_speed_idx]),
+        "root_drop_time": None if drop_event_idx is None else float(times[drop_event_idx]),
+        "tilt_20_time": None if tilt_event_idx is None else float(times[tilt_event_idx]),
+        "tilt_45_time": None if severe_tilt_idx is None else float(times[severe_tilt_idx]),
+        "support_loss_time": None if support_loss_idx is None else float(times[support_loss_idx]),
+        "single_support_time": None if single_support_idx is None else float(times[single_support_idx]),
+        "loaded_single_support_time": (
+            None if loaded_single_support_idx is None else float(times[loaded_single_support_idx])
+        ),
+    }
+
+    if support_margin is not None:
+        min_support_margin_idx = int(np.argmin(support_margin))
+        metrics["support_margin_start"] = float(support_margin[0])
+        metrics["support_margin_end"] = float(support_margin[-1])
+        metrics["support_margin_min"] = float(support_margin[min_support_margin_idx])
+        metrics["support_margin_min_time"] = float(times[min_support_margin_idx])
+
+    if support_offset_xy is not None:
+        metrics["support_offset_xy_start"] = support_offset_xy[0].astype(np.float64).tolist()
+        metrics["support_offset_xy_min"] = np.min(support_offset_xy, axis=0).astype(np.float64).tolist()
+        metrics["support_offset_xy_max"] = np.max(support_offset_xy, axis=0).astype(np.float64).tolist()
+        if support_loss_idx is not None:
+            metrics["support_offset_xy_at_support_loss"] = support_offset_xy[support_loss_idx].astype(np.float64).tolist()
+        else:
+            metrics["support_offset_xy_at_support_loss"] = None
+
+    return metrics
+
+
 def analyze_trace(
     trace_path: Path,
     *,
