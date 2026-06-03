@@ -17,8 +17,19 @@ DEFAULT_USD_REL_PATH = Path("urdf") / "humanoid_publish" / "humanoid_publish.usd
 def _resolve_usd_path() -> Path:
     configured_rel_path = os.getenv(USD_REL_PATH_ENV_VAR)
     if configured_rel_path:
-        return ASSET_DIR / Path(configured_rel_path)
-    return ASSET_DIR / DEFAULT_USD_REL_PATH
+        usd_path = ASSET_DIR / Path(configured_rel_path)
+    else:
+        usd_path = ASSET_DIR / DEFAULT_USD_REL_PATH
+
+    usd_path = usd_path.resolve()
+    if not usd_path.is_file():
+        configured_hint = f"{USD_REL_PATH_ENV_VAR}={configured_rel_path}" if configured_rel_path else "default USD path"
+        raise FileNotFoundError(
+            f"Real Lite USD asset not found: {usd_path}\n"
+            f"Resolved from {configured_hint} under asset root: {ASSET_DIR}\n"
+            "Generate the USD first or point TIENKUNG_LITE_USD_REL_PATH to an existing USD file."
+        )
+    return usd_path
 
 
 USD_PATH = _resolve_usd_path()

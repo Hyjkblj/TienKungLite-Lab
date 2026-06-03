@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -11,8 +12,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from real_lite_lab.assets import resolve_real_lite_asset_root
+from real_lite_lab.reference_tienkung2_lite import REFERENCE_TIENKUNG2_LITE_SNAPSHOT
 
 
+REFERENCE_ASSET_ROOT_ENV_VAR = "TIENKUNG_REFERENCE_ASSET_ROOT"
 JOINT_ALIAS_MAP = {
     "elbow_pitch_l_joint": "elbow_l_joint",
     "elbow_pitch_r_joint": "elbow_r_joint",
@@ -26,6 +29,25 @@ INERTIA_ATTRS = ("ixx", "ixy", "ixz", "iyy", "iyz", "izz")
 
 def _log(message: str) -> None:
     print(message, flush=True)
+
+
+def _default_reference_asset_root() -> Path:
+    env_text = os.environ.get(REFERENCE_ASSET_ROOT_ENV_VAR)
+    if env_text:
+        return Path(env_text).expanduser().resolve()
+    return (ROOT.parent / "TienKung-Lab" / "legged_lab" / "assets" / "tienkung2_lite").resolve()
+
+
+def _cli_flag_present(flag_name: str) -> bool:
+    return any(argument == flag_name or argument.startswith(f"{flag_name}=") for argument in sys.argv[1:])
+
+
+def _reference_override_requested() -> bool:
+    return (
+        _cli_flag_present("--reference-asset-root")
+        or _cli_flag_present("--reference-urdf")
+        or bool(os.environ.get(REFERENCE_ASSET_ROOT_ENV_VAR))
+    )
 
 
 def _canonical_joint_name(name: str, *, side: str) -> str:
@@ -50,8 +72,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--reference-asset-root",
         type=str,
-        default=str((ROOT.parent / "TienKung-Lab" / "legged_lab" / "assets" / "tienkung2_lite").resolve()),
-        help="Path to the reference TienKung-Lab asset root.",
+        default=str(_default_reference_asset_root()),
+        help=f"Path to the reference TienKung-Lab asset root. Can also be set with {REFERENCE_ASSET_ROOT_ENV_VAR}.",
     )
     parser.add_argument(
         "--candidate-asset-root",
@@ -116,7 +138,7 @@ def _resolve_paths(args: argparse.Namespace) -> tuple[Path, Path, Path]:
         else candidate_urdf.with_name(f"{candidate_urdf.stem}.reference_aligned.urdf")
     )
 
-    if not reference_urdf.is_file():
+    if not reference_urdf.is_file() and _reference_override_requested():
         raise FileNotFoundError(f"Reference URDF not found: {reference_urdf}")
     if not candidate_urdf.is_file():
         raise FileNotFoundError(f"Candidate URDF not found: {candidate_urdf}")
@@ -166,12 +188,49 @@ def _build_reference_link_masses(root: ET.Element) -> dict[str, float]:
     return values
 
 
+def _build_reference_link_collision_counts_from_snapshot() -> dict[str, int]:
+    values: dict[str, int] = {}
+    for name, payload in REFERENCE_TIENKUNG2_LITE_SNAPSHOT["urdf"]["links"].items():
+        values[_canonical_link_name(name, side="reference")] = int(payload["collision_count"])
+    return values
+
+
+def _build_reference_joint_limits_from_snapshot() -> dict[str, dict[str, str]]:
+    values: dict[str, dict[str, str]] = {}
+    for name, payload in REFERENCE_TIENKUNG2_LITE_SNAPSHOT["urdf"]["joints"].items():
+        limit_payload: dict[str, str] = {}
+        for attr in ("lower", "upper", "effort", "velocity"):
+            value = payload.get(attr)
+            if value is not None:
+                limit_payload[attr] = str(value)
+        if limit_payload:
+            values[_canonical_joint_name(name, side="reference")] = limit_payload
+    return values
+
+
+def _build_reference_link_masses_from_snapshot() -> dict[str, float]:
+    values: dict[str, float] = {}
+    for name, payload in REFERENCE_TIENKUNG2_LITE_SNAPSHOT["urdf"]["links"].items():
+        mass_value = payload.get("mass")
+        if mass_value is None:
+            continue
+        values[_canonical_link_name(name, side="reference")] = float(mass_value)
+    return values
+
+
 def _build_reference_link_names(root: ET.Element) -> set[str]:
     values: set[str] = set()
     for link in root.findall("link"):
         name = link.get("name")
         if not name:
             continue
+        values.add(_canonical_link_name(name, side="reference"))
+    return values
+
+
+def _build_reference_link_names_from_snapshot() -> set[str]:
+    values: set[str] = set()
+    for name in REFERENCE_TIENKUNG2_LITE_SNAPSHOT["urdf"]["links"].keys():
         values.add(_canonical_link_name(name, side="reference"))
     return values
 
@@ -284,19 +343,27 @@ def main() -> None:
     args = _parse_args()
     reference_urdf, candidate_urdf, output_urdf = _resolve_paths(args)
 
-    reference_tree = ET.parse(reference_urdf)
-    reference_root = reference_tree.getroot()
     candidate_tree = ET.parse(candidate_urdf)
     candidate_root = candidate_tree.getroot()
 
-    _log(f"[INFO] reference_urdf: {reference_urdf}")
+    if reference_urdf.is_file():
+        reference_tree = ET.parse(reference_urdf)
+        reference_root = reference_tree.getroot()
+        reference_collision_counts = _build_reference_link_collision_counts(reference_root)
+        reference_joint_limits = _build_reference_joint_limits(reference_root)
+        reference_link_masses = _build_reference_link_masses(reference_root)
+        reference_link_names = _build_reference_link_names(reference_root)
+        reference_source = f"filesystem:{reference_urdf}"
+    else:
+        reference_collision_counts = _build_reference_link_collision_counts_from_snapshot()
+        reference_joint_limits = _build_reference_joint_limits_from_snapshot()
+        reference_link_masses = _build_reference_link_masses_from_snapshot()
+        reference_link_names = _build_reference_link_names_from_snapshot()
+        reference_source = f"snapshot:{REFERENCE_TIENKUNG2_LITE_SNAPSHOT['source_hint']}"
+
+    _log(f"[INFO] reference_source: {reference_source}")
     _log(f"[INFO] candidate_urdf: {candidate_urdf}")
     _log(f"[INFO] output_urdf: {output_urdf}")
-
-    reference_collision_counts = _build_reference_link_collision_counts(reference_root)
-    reference_joint_limits = _build_reference_joint_limits(reference_root)
-    reference_link_masses = _build_reference_link_masses(reference_root)
-    reference_link_names = _build_reference_link_names(reference_root)
     fixed_joint_children = _build_fixed_joint_children(candidate_root)
 
     candidate_only_fixed_links: list[str] = []

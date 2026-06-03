@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -11,8 +12,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from real_lite_lab.assets import resolve_real_lite_asset_root
+from real_lite_lab.reference_tienkung2_lite import REFERENCE_TIENKUNG2_LITE_SNAPSHOT
 
 
+REFERENCE_ASSET_ROOT_ENV_VAR = "TIENKUNG_REFERENCE_ASSET_ROOT"
 JOINT_ALIAS_MAP = {
     "elbow_pitch_l_joint": "elbow_l_joint",
     "elbow_pitch_r_joint": "elbow_r_joint",
@@ -25,6 +28,26 @@ LINK_ALIAS_MAP = {
 
 def _log(message: str) -> None:
     print(message, flush=True)
+
+
+def _default_reference_asset_root() -> Path:
+    env_text = os.environ.get(REFERENCE_ASSET_ROOT_ENV_VAR)
+    if env_text:
+        return Path(env_text).expanduser().resolve()
+    return (ROOT.parent / "TienKung-Lab" / "legged_lab" / "assets" / "tienkung2_lite").resolve()
+
+
+def _cli_flag_present(flag_name: str) -> bool:
+    return any(argument == flag_name or argument.startswith(f"{flag_name}=") for argument in sys.argv[1:])
+
+
+def _reference_override_requested() -> bool:
+    return (
+        _cli_flag_present("--reference-asset-root")
+        or _cli_flag_present("--reference-urdf")
+        or _cli_flag_present("--reference-usd")
+        or bool(os.environ.get(REFERENCE_ASSET_ROOT_ENV_VAR))
+    )
 
 
 def _detect_fixed_root_markers(physics_usd_path: Path) -> dict[str, bool]:
@@ -130,6 +153,22 @@ def _parse_urdf(path: Path) -> dict[str, object]:
         "total_mass": total_mass,
         "nonzero_collision_links": nonzero_collision_links,
         "total_collision_elems": total_collision_elems,
+    }
+
+
+def _reference_from_snapshot() -> dict[str, object]:
+    urdf_snapshot = REFERENCE_TIENKUNG2_LITE_SNAPSHOT["urdf"]
+    return {
+        "path": Path(f"<snapshot:{REFERENCE_TIENKUNG2_LITE_SNAPSHOT['source_hint']}>"),
+        "links": dict(urdf_snapshot["links"]),
+        "joints": dict(urdf_snapshot["joints"]),
+        "link_count": int(urdf_snapshot["link_count"]),
+        "joint_count": int(urdf_snapshot["joint_count"]),
+        "fixed_joint_count": int(urdf_snapshot["fixed_joint_count"]),
+        "revolute_joint_count": int(urdf_snapshot["revolute_joint_count"]),
+        "total_mass": float(urdf_snapshot["total_mass"]),
+        "nonzero_collision_links": int(urdf_snapshot["nonzero_collision_links"]),
+        "total_collision_elems": int(urdf_snapshot["total_collision_elems"]),
     }
 
 
@@ -241,8 +280,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--reference-asset-root",
         type=str,
-        default=str((ROOT.parent / "TienKung-Lab" / "legged_lab" / "assets" / "tienkung2_lite").resolve()),
-        help="Path to the reference TienKung-Lab asset root.",
+        default=str(_default_reference_asset_root()),
+        help=f"Path to the reference TienKung-Lab asset root. Can also be set with {REFERENCE_ASSET_ROOT_ENV_VAR}.",
     )
     parser.add_argument(
         "--candidate-asset-root",
@@ -310,14 +349,31 @@ def main() -> None:
         else candidate_root / "urdf" / "humanoid_publish_free_base" / "humanoid_publish_free_base.usd"
     )
 
-    reference = _parse_urdf(reference_urdf)
+    if reference_urdf.is_file():
+        reference = _parse_urdf(reference_urdf)
+        reference_cfg = _parse_simple_yaml(reference_root / "usd" / "config.yaml")
+        reference_markers = _detect_fixed_root_markers(_resolve_physics_usd_path(reference_usd))
+        reference_source = "filesystem"
+        reference_root_display = str(reference_root)
+        reference_urdf_display = str(reference_urdf)
+        reference_usd_display = str(_resolve_physics_usd_path(reference_usd))
+    else:
+        if _reference_override_requested():
+            raise FileNotFoundError(f"Reference URDF not found: {reference_urdf}")
+        reference = _reference_from_snapshot()
+        reference_cfg = dict(REFERENCE_TIENKUNG2_LITE_SNAPSHOT["usd_config"])
+        reference_markers = dict(REFERENCE_TIENKUNG2_LITE_SNAPSHOT["usd_markers"])
+        reference_source = "snapshot"
+        snapshot_hint = REFERENCE_TIENKUNG2_LITE_SNAPSHOT["source_hint"]
+        reference_root_display = f"<snapshot:{snapshot_hint}>"
+        reference_urdf_display = f"<snapshot:{snapshot_hint}>"
+        reference_usd_display = f"<snapshot:{snapshot_hint}>"
+
     candidate = _parse_urdf(candidate_urdf)
 
-    reference_cfg = _parse_simple_yaml(reference_root / "usd" / "config.yaml")
     candidate_default_cfg = _parse_simple_yaml(candidate_root / "urdf" / "humanoid_publish" / "config.yaml")
     candidate_freebase_cfg = _parse_simple_yaml(candidate_root / "urdf" / "humanoid_publish_free_base" / "config.yaml")
 
-    reference_markers = _detect_fixed_root_markers(_resolve_physics_usd_path(reference_usd))
     candidate_default_markers = _detect_fixed_root_markers(_resolve_physics_usd_path(candidate_default_usd))
     candidate_freebase_markers = _detect_fixed_root_markers(_resolve_physics_usd_path(candidate_freebase_usd))
 
@@ -326,9 +382,10 @@ def main() -> None:
     collision_rows = _compare_collision_counts(reference, candidate)
 
     _log("[SUMMARY]")
-    _log(f"reference_asset_root: {reference_root}")
+    _log(f"reference_asset_root: {reference_root_display}")
+    _log(f"reference_source: {reference_source}")
     _log(f"candidate_asset_root: {candidate_root}")
-    _log(f"reference_urdf: {reference_urdf}")
+    _log(f"reference_urdf: {reference_urdf_display}")
     _log(f"candidate_urdf: {candidate_urdf}")
     _log(
         "reference_urdf_summary: "
@@ -347,7 +404,7 @@ def main() -> None:
     _log("[USD]")
     _log(
         "reference_usd_markers: "
-        f"path={_resolve_physics_usd_path(reference_usd)}, exists={reference_markers['exists']}, "
+        f"path={reference_usd_display}, exists={reference_markers['exists']}, "
         f"root_joint={reference_markers['has_root_joint']}, Fixed={reference_markers['has_fixed_token']}"
     )
     _log(
