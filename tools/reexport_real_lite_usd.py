@@ -13,6 +13,10 @@ from real_lite_lab.assets import resolve_real_lite_asset_root
 from real_lite_lab.runtime_paths import ensure_writable_isaaclab_tmp
 
 
+def _log(message: str) -> None:
+    print(message, flush=True)
+
+
 def _detect_fixed_root_markers(physics_usd_path: Path) -> dict[str, bool]:
     if not physics_usd_path.is_file():
         return {"physics_usd_exists": False, "has_root_joint": False, "has_fixed_token": False}
@@ -72,7 +76,9 @@ def main() -> None:
     args = _parse_args()
 
     asset_root = Path(args.asset_root).expanduser().resolve() if args.asset_root else resolve_real_lite_asset_root()
-    urdf_path = Path(args.urdf_path).expanduser().resolve() if args.urdf_path else asset_root / "urdf" / "humanoid_publish.urdf"
+    urdf_path = (
+        Path(args.urdf_path).expanduser().resolve() if args.urdf_path else asset_root / "urdf" / "humanoid_publish.urdf"
+    )
     if not urdf_path.is_file():
         raise FileNotFoundError(f"URDF file not found: {urdf_path}")
 
@@ -84,6 +90,13 @@ def main() -> None:
     usd_file_name = args.usd_file_name or f"{usd_subdir}.usd"
     if "/" in usd_file_name or "\\" in usd_file_name:
         raise ValueError("--usd_file_name must be a file name, not a path.")
+    usd_path = usd_dir / usd_file_name
+
+    _log(f"[INFO] asset_root: {asset_root}")
+    _log(f"[INFO] urdf_path: {urdf_path}")
+    _log(f"[INFO] usd_dir: {usd_dir}")
+    _log(f"[INFO] usd_path: {usd_path}")
+    _log(f"[INFO] export_mode: {'fixed_base' if args.fix_base else 'free_base'}")
 
     ensure_writable_isaaclab_tmp(ROOT / "logs" / "_isaaclab_tmp")
 
@@ -120,26 +133,39 @@ def main() -> None:
             replace_cylinders_with_capsules=False,
             collision_from_visuals=False,
         )
-        converter = UrdfConverter(cfg)
+        _log("[INFO] Starting URDF -> USD conversion...")
+        UrdfConverter(cfg)
+        _log("[INFO] URDF -> USD conversion returned.")
 
-        usd_path = Path(converter.usd_path).resolve()
-        physics_usd_path = usd_path.parent / "configuration" / f"{usd_path.stem}_physics.usd"
+        physics_usd_candidates = [
+            usd_path.parent / "configuration" / f"{usd_path.stem}_physics.usd",
+            usd_path.parent / "configuration" / "humanoid_publish_physics.usd",
+        ]
+        physics_usd_path = next((candidate for candidate in physics_usd_candidates if candidate.is_file()), physics_usd_candidates[0])
         fixed_root_markers = _detect_fixed_root_markers(physics_usd_path)
 
+        generated_files = []
+        if usd_dir.is_dir():
+            generated_files = sorted(str(path.relative_to(usd_dir)) for path in usd_dir.rglob("*") if path.is_file())
+
         rel_usd_path = usd_path.relative_to(asset_root)
-        print(f"[INFO] asset_root: {asset_root}")
-        print(f"[INFO] urdf_path: {urdf_path}")
-        print(f"[INFO] usd_path: {usd_path}")
-        print(f"[INFO] physics_usd_path: {physics_usd_path}")
-        print(f"[INFO] export_mode: {'fixed_base' if args.fix_base else 'free_base'}")
-        print(f"[INFO] test_with_env: export TIENKUNG_LITE_USD_REL_PATH={rel_usd_path.as_posix()}")
-        print(
+        _log(f"[INFO] physics_usd_path: {physics_usd_path}")
+        _log(f"[INFO] usd_exists: {usd_path.is_file()}")
+        _log(f"[INFO] test_with_env: export TIENKUNG_LITE_USD_REL_PATH={rel_usd_path.as_posix()}")
+        _log(
             "[INFO] physics_usd_markers: "
             f"root_joint={fixed_root_markers['has_root_joint']}, "
             f"Fixed={fixed_root_markers['has_fixed_token']}"
         )
+        _log(f"[INFO] generated_files_count: {len(generated_files)}")
+        for rel_path in generated_files[:20]:
+            _log(f"[INFO] generated_file: {rel_path}")
+        if len(generated_files) > 20:
+            _log(f"[INFO] generated_file: ... ({len(generated_files) - 20} more)")
         if not args.fix_base and fixed_root_markers["has_root_joint"] and fixed_root_markers["has_fixed_token"]:
-            print("[WARN] Generated USD still contains fixed-root markers; inspect the converter input/config before using it.")
+            _log("[WARN] Generated USD still contains fixed-root markers; inspect the converter input/config before using it.")
+        if not usd_path.is_file():
+            _log("[WARN] Expected USD file was not created at the requested path.")
     finally:
         simulation_app.close()
 
