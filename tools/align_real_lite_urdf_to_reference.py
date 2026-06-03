@@ -25,28 +25,6 @@ LINK_ALIAS_MAP = {
     "elbow_pitch_r_link": "elbow_r_link",
 }
 INERTIA_ATTRS = ("ixx", "ixy", "ixz", "iyy", "iyz", "izz")
-REFERENCE_ANKLE_ROLL_COLLISION_SPECS = {
-    "ankle_roll_l_link": (
-        {
-            "origin": {"xyz": "0.035 0.025 -0.042", "rpy": "0 1.5708 0"},
-            "geometry": ("cylinder", {"length": "0.23", "radius": "0.015"}),
-        },
-        {
-            "origin": {"xyz": "0.035 -0.025 -0.042", "rpy": "0 1.5708 0"},
-            "geometry": ("cylinder", {"length": "0.23", "radius": "0.015"}),
-        },
-    ),
-    "ankle_roll_r_link": (
-        {
-            "origin": {"xyz": "0.035 0.025 -0.042", "rpy": "0 1.5708 0"},
-            "geometry": ("cylinder", {"length": "0.23", "radius": "0.015"}),
-        },
-        {
-            "origin": {"xyz": "0.035 -0.025 -0.042", "rpy": "0 1.5708 0"},
-            "geometry": ("cylinder", {"length": "0.23", "radius": "0.015"}),
-        },
-    ),
-}
 
 
 def _log(message: str) -> None:
@@ -82,6 +60,57 @@ def _canonical_link_name(name: str, *, side: str) -> str:
     if side == "reference":
         return LINK_ALIAS_MAP.get(name, name)
     return name
+
+
+def _normalize_collision_spec(spec: dict[str, object]) -> dict[str, object]:
+    origin_raw = spec.get("origin")
+    origin = dict(origin_raw) if isinstance(origin_raw, dict) else {}
+
+    geometry_raw = spec.get("geometry")
+    if isinstance(geometry_raw, tuple):
+        geom_tag, geom_attrib = geometry_raw
+        geometry = {"tag": str(geom_tag), "attrib": dict(geom_attrib)}
+    elif isinstance(geometry_raw, dict):
+        geometry = {
+            "tag": str(geometry_raw.get("tag")),
+            "attrib": {str(key): str(value) for key, value in dict(geometry_raw.get("attrib", {})).items()},
+        }
+    else:
+        raise ValueError(f"Unsupported collision geometry payload: {geometry_raw!r}")
+
+    payload: dict[str, object] = {
+        "origin": {key: str(value) for key, value in origin.items()},
+        "geometry": geometry,
+    }
+    if spec.get("name") is not None:
+        payload["name"] = str(spec["name"])
+    return payload
+
+
+def _extract_collision_specs(link: ET.Element) -> tuple[dict[str, object], ...]:
+    specs: list[dict[str, object]] = []
+    for collision in link.findall("collision"):
+        geometry_elem = collision.find("geometry")
+        if geometry_elem is None or len(geometry_elem) == 0:
+            continue
+        geom_elem = geometry_elem[0]
+        origin_elem = collision.find("origin")
+
+        spec: dict[str, object] = {
+            "origin": {},
+            "geometry": {"tag": geom_elem.tag, "attrib": dict(geom_elem.attrib)},
+        }
+        if collision.get("name") is not None:
+            spec["name"] = collision.get("name")
+        if origin_elem is not None:
+            origin_attrib = {}
+            for attr in ("xyz", "rpy"):
+                value = origin_elem.get(attr)
+                if value is not None:
+                    origin_attrib[attr] = value
+            spec["origin"] = origin_attrib
+        specs.append(_normalize_collision_spec(spec))
+    return tuple(specs)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -151,8 +180,25 @@ def _parse_args() -> argparse.Namespace:
         "--replace-ankle-roll-collisions-with-reference",
         action="store_true",
         help=(
-            "Replace ankle_roll link collision geometry with the original TienKung-Lab dual-cylinder "
-            "collision layout instead of the imported mesh collision."
+            "Shorthand for --replace-collision-links-with-reference ankle_roll_l_link ankle_roll_r_link."
+        ),
+    )
+    parser.add_argument(
+        "--replace-all-primitive-collisions-with-reference",
+        action="store_true",
+        help=(
+            "Replace all candidate collision geometry for links whose reference asset uses primitive "
+            "collision shapes instead of imported mesh collisions."
+        ),
+    )
+    parser.add_argument(
+        "--replace-collision-links-with-reference",
+        nargs="+",
+        default=None,
+        help=(
+            "Replace the selected candidate link collisions with the exact reference collision specs. "
+            "Accepts either reference names (for example elbow_pitch_l_link) or candidate names "
+            "(for example elbow_l_link)."
         ),
     )
     return parser.parse_args()
@@ -195,6 +241,18 @@ def _build_reference_link_collision_counts(root: ET.Element) -> dict[str, int]:
     return counts
 
 
+def _build_reference_link_collision_specs(root: ET.Element) -> dict[str, tuple[dict[str, object], ...]]:
+    values: dict[str, tuple[dict[str, object], ...]] = {}
+    for link in root.findall("link"):
+        name = link.get("name")
+        if not name:
+            continue
+        specs = _extract_collision_specs(link)
+        if specs:
+            values[_canonical_link_name(name, side="reference")] = specs
+    return values
+
+
 def _build_reference_joint_limits(root: ET.Element) -> dict[str, dict[str, str]]:
     values: dict[str, dict[str, str]] = {}
     for joint in root.findall("joint"):
@@ -231,6 +289,18 @@ def _build_reference_link_collision_counts_from_snapshot() -> dict[str, int]:
     values: dict[str, int] = {}
     for name, payload in REFERENCE_TIENKUNG2_LITE_SNAPSHOT["urdf"]["links"].items():
         values[_canonical_link_name(name, side="reference")] = int(payload["collision_count"])
+    return values
+
+
+def _build_reference_link_collision_specs_from_snapshot() -> dict[str, tuple[dict[str, object], ...]]:
+    values: dict[str, tuple[dict[str, object], ...]] = {}
+    for name, payload in REFERENCE_TIENKUNG2_LITE_SNAPSHOT["urdf"]["links"].items():
+        collision_specs = payload.get("collision_specs")
+        if not collision_specs:
+            continue
+        values[_canonical_link_name(name, side="reference")] = tuple(
+            _normalize_collision_spec(spec) for spec in collision_specs
+        )
     return values
 
 
@@ -398,24 +468,68 @@ def _zero_candidate_only_fixed_link_masses(candidate_root: ET.Element, candidate
     return len(changed_links), changed_links
 
 
-def _replace_ankle_roll_collisions_with_reference(candidate_root: ET.Element) -> tuple[int, list[str]]:
-    changed_links: list[str] = []
+def _is_primitive_collision_spec(spec: dict[str, object]) -> bool:
+    geometry = spec.get("geometry")
+    if not isinstance(geometry, dict):
+        return False
+    return str(geometry.get("tag")) != "mesh"
+
+
+def _parse_requested_link_names(raw_values: list[str] | None) -> set[str]:
+    values: set[str] = set()
+    for raw_value in raw_values or []:
+        for item in raw_value.split(","):
+            name = item.strip()
+            if not name:
+                continue
+            values.add(_canonical_link_name(name, side="reference"))
+    return values
+
+
+def _replace_collision_links_with_reference(
+    candidate_root: ET.Element,
+    reference_collision_specs: dict[str, tuple[dict[str, object], ...]],
+    target_link_names: set[str],
+) -> tuple[int, list[str], list[str], list[str]]:
+    candidate_links: dict[str, ET.Element] = {}
     for link in candidate_root.findall("link"):
         name = link.get("name")
-        if not name or name not in REFERENCE_ANKLE_ROLL_COLLISION_SPECS:
+        if not name:
+            continue
+        candidate_links[_canonical_link_name(name, side="candidate")] = link
+
+    changed_links: list[str] = []
+    missing_links: list[str] = []
+    unavailable_links: list[str] = []
+    for target_name in sorted(target_link_names):
+        link = candidate_links.get(target_name)
+        if link is None:
+            missing_links.append(target_name)
+            continue
+
+        specs = reference_collision_specs.get(target_name)
+        if not specs:
+            unavailable_links.append(target_name)
             continue
 
         for collision in list(link.findall("collision")):
             link.remove(collision)
 
-        for collision_spec in REFERENCE_ANKLE_ROLL_COLLISION_SPECS[name]:
-            collision_elem = ET.SubElement(link, "collision")
-            ET.SubElement(collision_elem, "origin", attrib=dict(collision_spec["origin"]))
+        for collision_spec in specs:
+            collision_attrib = {}
+            if collision_spec.get("name") is not None:
+                collision_attrib["name"] = str(collision_spec["name"])
+            collision_elem = ET.SubElement(link, "collision", attrib=collision_attrib)
+            origin_attrib = dict(collision_spec.get("origin", {}))
+            if origin_attrib:
+                ET.SubElement(collision_elem, "origin", attrib=origin_attrib)
             geometry_elem = ET.SubElement(collision_elem, "geometry")
-            geom_tag, geom_attrib = collision_spec["geometry"]
-            ET.SubElement(geometry_elem, geom_tag, attrib=dict(geom_attrib))
-        changed_links.append(name)
-    return len(changed_links), changed_links
+            geometry = dict(collision_spec["geometry"])
+            geom_tag = str(geometry["tag"])
+            geom_attrib = dict(geometry.get("attrib", {}))
+            ET.SubElement(geometry_elem, geom_tag, attrib=geom_attrib)
+        changed_links.append(target_name)
+    return len(changed_links), changed_links, missing_links, unavailable_links
 
 
 def _write_xml(output_path: Path, tree: ET.ElementTree) -> None:
@@ -437,12 +551,14 @@ def main() -> None:
         reference_tree = ET.parse(reference_urdf)
         reference_root = reference_tree.getroot()
         reference_collision_counts = _build_reference_link_collision_counts(reference_root)
+        reference_collision_specs = _build_reference_link_collision_specs(reference_root)
         reference_joint_limits = _build_reference_joint_limits(reference_root)
         reference_link_masses = _build_reference_link_masses(reference_root)
         reference_link_names = _build_reference_link_names(reference_root)
         reference_source = f"filesystem:{reference_urdf}"
     else:
         reference_collision_counts = _build_reference_link_collision_counts_from_snapshot()
+        reference_collision_specs = _build_reference_link_collision_specs_from_snapshot()
         reference_joint_limits = _build_reference_joint_limits_from_snapshot()
         reference_link_masses = _build_reference_link_masses_from_snapshot()
         reference_link_names = _build_reference_link_names_from_snapshot()
@@ -523,17 +639,40 @@ def main() -> None:
         if zeroed_extra_fixed_links:
             _log(f"[INFO] zeroed_candidate_only_fixed_links: {', '.join(zeroed_extra_fixed_links)}")
 
-    replaced_ankle_collision_count = 0
-    replaced_ankle_collision_links: list[str] = []
+    requested_replacement_links = _parse_requested_link_names(args.replace_collision_links_with_reference)
     if args.replace_ankle_roll_collisions_with_reference:
-        replaced_ankle_collision_count, replaced_ankle_collision_links = _replace_ankle_roll_collisions_with_reference(
-            candidate_root
+        requested_replacement_links.update({"ankle_roll_l_link", "ankle_roll_r_link"})
+    if args.replace_all_primitive_collisions_with_reference:
+        requested_replacement_links.update(
+            name
+            for name, specs in reference_collision_specs.items()
+            if specs and all(_is_primitive_collision_spec(spec) for spec in specs)
+        )
+
+    replaced_collision_count = 0
+    replaced_collision_links: list[str] = []
+    missing_collision_links: list[str] = []
+    unavailable_collision_links: list[str] = []
+    if requested_replacement_links:
+        (
+            replaced_collision_count,
+            replaced_collision_links,
+            missing_collision_links,
+            unavailable_collision_links,
+        ) = _replace_collision_links_with_reference(
+            candidate_root,
+            reference_collision_specs,
+            requested_replacement_links,
         )
         _log(
-            f"[INFO] replace_ankle_roll_collisions_with_reference: updated {replaced_ankle_collision_count} links"
+            f"[INFO] replace_collision_links_with_reference: updated {replaced_collision_count} links"
         )
-        if replaced_ankle_collision_links:
-            _log(f"[INFO] replaced_ankle_roll_collision_links: {', '.join(replaced_ankle_collision_links)}")
+        if replaced_collision_links:
+            _log(f"[INFO] replaced_collision_links: {', '.join(replaced_collision_links)}")
+        if missing_collision_links:
+            _log(f"[WARN] requested_collision_links_missing_in_candidate: {', '.join(missing_collision_links)}")
+        if unavailable_collision_links:
+            _log(f"[WARN] requested_collision_links_missing_in_reference: {', '.join(unavailable_collision_links)}")
 
     _write_xml(output_urdf, candidate_tree)
     _log("[INFO] Wrote aligned URDF copy.")

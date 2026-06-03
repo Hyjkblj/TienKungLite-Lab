@@ -6,27 +6,138 @@ REFERENCE_TIENKUNG2_LITE_SNAPSHOT = {
     "source_hint": "TienKung-Lab/legged_lab/assets/tienkung2_lite",
     "urdf": {
         "links": {
-            "pelvis": {"mass": 27.771712, "collision_count": 1},
+            "pelvis": {
+                "mass": 27.771712,
+                "collision_count": 1,
+                "collision_specs": (
+                    {
+                        "origin": {"xyz": "-0.02 0.0 -0.11", "rpy": "1.57 0 0"},
+                        "geometry": {"tag": "cylinder", "attrib": {"length": "0.11", "radius": "0.085"}},
+                    },
+                ),
+            },
             "hip_roll_l_link": {"mass": 0.672983, "collision_count": 0},
             "hip_pitch_l_link": {"mass": 3.951912, "collision_count": 0},
-            "hip_yaw_l_link": {"mass": 6.670795, "collision_count": 1},
-            "knee_pitch_l_link": {"mass": 2.312685, "collision_count": 1},
+            "hip_yaw_l_link": {
+                "mass": 6.670795,
+                "collision_count": 1,
+                "collision_specs": (
+                    {
+                        "origin": {"xyz": "0.0 0.0 -0.1", "rpy": "0 0 0"},
+                        "geometry": {"tag": "cylinder", "attrib": {"length": "0.2", "radius": "0.03"}},
+                    },
+                ),
+            },
+            "knee_pitch_l_link": {
+                "mass": 2.312685,
+                "collision_count": 1,
+                "collision_specs": (
+                    {
+                        "origin": {"xyz": "0.0 0.0 -0.15", "rpy": "0 0 0"},
+                        "geometry": {"tag": "cylinder", "attrib": {"length": "0.3", "radius": "0.03"}},
+                    },
+                ),
+            },
             "ankle_pitch_l_link": {"mass": 0.111609, "collision_count": 0},
-            "ankle_roll_l_link": {"mass": 1.017381, "collision_count": 2},
+            "ankle_roll_l_link": {
+                "mass": 1.017381,
+                "collision_count": 2,
+                "collision_specs": (
+                    {
+                        "name": "toe1_left",
+                        "origin": {"xyz": "0.035 0.025 -0.042", "rpy": "0 1.5708 0"},
+                        "geometry": {"tag": "cylinder", "attrib": {"length": "0.23", "radius": "0.015"}},
+                    },
+                    {
+                        "name": "toe2_left",
+                        "origin": {"xyz": "0.035 -0.025 -0.042", "rpy": "0 1.5708 0"},
+                        "geometry": {"tag": "cylinder", "attrib": {"length": "0.23", "radius": "0.015"}},
+                    },
+                ),
+            },
             "hip_roll_r_link": {"mass": 0.672983, "collision_count": 0},
             "hip_pitch_r_link": {"mass": 3.951912, "collision_count": 0},
-            "hip_yaw_r_link": {"mass": 6.670795, "collision_count": 1},
-            "knee_pitch_r_link": {"mass": 2.312685, "collision_count": 1},
+            "hip_yaw_r_link": {
+                "mass": 6.670795,
+                "collision_count": 1,
+                "collision_specs": (
+                    {
+                        "origin": {"xyz": "0.0 0.0 -0.1", "rpy": "0 0 0"},
+                        "geometry": {"tag": "cylinder", "attrib": {"length": "0.2", "radius": "0.03"}},
+                    },
+                ),
+            },
+            "knee_pitch_r_link": {
+                "mass": 2.312685,
+                "collision_count": 1,
+                "collision_specs": (
+                    {
+                        "origin": {"xyz": "0.0 0.0 -0.15", "rpy": "0 0 0"},
+                        "geometry": {"tag": "cylinder", "attrib": {"length": "0.3", "radius": "0.03"}},
+                    },
+                ),
+            },
             "ankle_pitch_r_link": {"mass": 0.111609, "collision_count": 0},
-            "ankle_roll_r_link": {"mass": 1.017381, "collision_count": 2},
+            "ankle_roll_r_link": {
+                "mass": 1.017381,
+                "collision_count": 2,
+                "collision_specs": (
+                    {
+                        "name": "toe1_right",
+                        "origin": {"xyz": "0.035 0.025 -0.042", "rpy": "0 1.5708 0"},
+                        "geometry": {"tag": "cylinder", "attrib": {"length": "0.23", "radius": "0.015"}},
+                    },
+                    {
+                        "name": "toe2_right",
+                        "origin": {"xyz": "0.035 -0.025 -0.042", "rpy": "0 1.5708 0"},
+                        "geometry": {"tag": "cylinder", "attrib": {"length": "0.23", "radius": "0.015"}},
+                    },
+                ),
+            },
             "shoulder_pitch_l_link": {"mass": 0.469057, "collision_count": 0},
-            "shoulder_roll_l_link": {"mass": 0.298029, "collision_count": 1},
+            "shoulder_roll_l_link": {
+                "mass": 0.298029,
+                "collision_count": 1,
+                "collision_specs": (
+                    {
+                        "origin": {"xyz": "0 0 0", "rpy": "0 0 0"},
+                        "geometry": {"tag": "sphere", "attrib": {"radius": "0.035"}},
+                    },
+                ),
+            },
             "shoulder_yaw_l_link": {"mass": 0.93608, "collision_count": 0},
-            "elbow_pitch_l_link": {"mass": 0.553799, "collision_count": 1},
+            "elbow_pitch_l_link": {
+                "mass": 0.553799,
+                "collision_count": 1,
+                "collision_specs": (
+                    {
+                        "origin": {"xyz": "0 -0.0 0", "rpy": "0 0 0"},
+                        "geometry": {"tag": "sphere", "attrib": {"radius": "0.035"}},
+                    },
+                ),
+            },
             "shoulder_pitch_r_link": {"mass": 0.469057, "collision_count": 0},
-            "shoulder_roll_r_link": {"mass": 0.298029, "collision_count": 1},
+            "shoulder_roll_r_link": {
+                "mass": 0.298029,
+                "collision_count": 1,
+                "collision_specs": (
+                    {
+                        "origin": {"xyz": "0 0 0", "rpy": "0 0 0"},
+                        "geometry": {"tag": "sphere", "attrib": {"radius": "0.035"}},
+                    },
+                ),
+            },
             "shoulder_yaw_r_link": {"mass": 0.93608, "collision_count": 0},
-            "elbow_pitch_r_link": {"mass": 0.553799, "collision_count": 1},
+            "elbow_pitch_r_link": {
+                "mass": 0.553799,
+                "collision_count": 1,
+                "collision_specs": (
+                    {
+                        "origin": {"xyz": "0 0.0 0", "rpy": "0 0 0"},
+                        "geometry": {"tag": "sphere", "attrib": {"radius": "0.035"}},
+                    },
+                ),
+            },
         },
         "joints": {
             "hip_roll_l_joint": {

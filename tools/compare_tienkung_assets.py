@@ -79,6 +79,32 @@ def _parse_simple_yaml(path: Path) -> dict[str, str]:
     return values
 
 
+def _extract_collision_specs(link: ET.Element) -> tuple[dict[str, object], ...]:
+    specs: list[dict[str, object]] = []
+    for collision in link.findall("collision"):
+        geometry_elem = collision.find("geometry")
+        if geometry_elem is None or len(geometry_elem) == 0:
+            continue
+        geom_elem = geometry_elem[0]
+        origin_elem = collision.find("origin")
+
+        spec: dict[str, object] = {
+            "origin": {},
+            "geometry": {"tag": geom_elem.tag, "attrib": dict(geom_elem.attrib)},
+        }
+        if collision.get("name") is not None:
+            spec["name"] = collision.get("name")
+        if origin_elem is not None:
+            origin_attrib = {}
+            for attr in ("xyz", "rpy"):
+                value = origin_elem.get(attr)
+                if value is not None:
+                    origin_attrib[attr] = value
+            spec["origin"] = origin_attrib
+        specs.append(spec)
+    return tuple(specs)
+
+
 def _parse_urdf(path: Path) -> dict[str, object]:
     root = ET.parse(path).getroot()
 
@@ -111,6 +137,7 @@ def _parse_urdf(path: Path) -> dict[str, object]:
         links[link_name] = {
             "mass": mass_value,
             "collision_count": collision_count,
+            "collision_specs": _extract_collision_specs(link),
         }
 
     fixed_joints = 0
@@ -275,6 +302,58 @@ def _compare_collision_counts(reference: dict[str, object], candidate: dict[str,
     return rows
 
 
+def _collision_signature(spec: dict[str, object]) -> tuple[object, ...]:
+    geometry = dict(spec.get("geometry", {}))
+    origin = dict(spec.get("origin", {}))
+    return (
+        spec.get("name"),
+        geometry.get("tag"),
+        tuple(sorted(dict(geometry.get("attrib", {})).items())),
+        tuple((key, origin.get(key)) for key in ("xyz", "rpy") if origin.get(key) is not None),
+    )
+
+
+def _format_collision_specs(specs: tuple[dict[str, object], ...]) -> str:
+    if not specs:
+        return "none"
+
+    chunks: list[str] = []
+    for spec in specs:
+        geometry = dict(spec.get("geometry", {}))
+        geom_tag = str(geometry.get("tag"))
+        geom_attrib = ",".join(f"{key}={value}" for key, value in sorted(dict(geometry.get("attrib", {})).items()))
+        origin = dict(spec.get("origin", {}))
+        origin_parts = [f"{key}={origin[key]}" for key in ("xyz", "rpy") if origin.get(key) is not None]
+        prefix = f"name={spec['name']} " if spec.get("name") is not None else ""
+        suffix = f" @ {'; '.join(origin_parts)}" if origin_parts else ""
+        chunks.append(f"{prefix}{geom_tag}({geom_attrib}){suffix}")
+    return " | ".join(chunks)
+
+
+def _compare_collision_specs(reference: dict[str, object], candidate: dict[str, object]) -> list[dict[str, object]]:
+    ref_links = {
+        _canonical_link_name(name, side="reference"): payload for name, payload in reference["links"].items()  # type: ignore[index]
+    }
+    cand_links = {
+        _canonical_link_name(name, side="candidate"): payload for name, payload in candidate["links"].items()  # type: ignore[index]
+    }
+
+    rows: list[dict[str, object]] = []
+    for name in sorted(set(ref_links) | set(cand_links)):
+        ref_specs = tuple(ref_links.get(name, {}).get("collision_specs", ()))
+        cand_specs = tuple(cand_links.get(name, {}).get("collision_specs", ()))
+        if tuple(_collision_signature(spec) for spec in ref_specs) == tuple(_collision_signature(spec) for spec in cand_specs):
+            continue
+        rows.append(
+            {
+                "name": name,
+                "reference_collision_specs": ref_specs,
+                "candidate_collision_specs": cand_specs,
+            }
+        )
+    return rows
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Compare the original TienKung-Lab asset against the current Real Lite asset.")
     parser.add_argument(
@@ -380,6 +459,7 @@ def main() -> None:
     mass_rows, only_reference_links, only_candidate_links = _compare_link_properties(reference, candidate)
     joint_rows = _compare_joint_properties(reference, candidate)
     collision_rows = _compare_collision_counts(reference, candidate)
+    collision_shape_rows = _compare_collision_specs(reference, candidate)
 
     _log("[SUMMARY]")
     _log(f"reference_asset_root: {reference_root_display}")
@@ -465,6 +545,15 @@ def main() -> None:
             f"{row['name']}: "
             f"reference_collision_count={row['reference_collision_count']}, "
             f"candidate_collision_count={row['candidate_collision_count']}"
+        )
+
+    _log("[COLLISION_SHAPE_DIFFS]")
+    _log(f"differing_collision_shape_link_count: {len(collision_shape_rows)}")
+    for row in collision_shape_rows:
+        _log(
+            f"{row['name']}: "
+            f"reference={_format_collision_specs(row['reference_collision_specs'])}; "
+            f"candidate={_format_collision_specs(row['candidate_collision_specs'])}"
         )
 
 
