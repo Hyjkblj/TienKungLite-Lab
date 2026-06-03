@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import isaaclab.sim as sim_utils
@@ -9,10 +10,22 @@ from .. import resolve_real_lite_asset_root
 from ...constants import DEFAULT_JOINT_POS
 
 ASSET_DIR = resolve_real_lite_asset_root()
+USD_REL_PATH_ENV_VAR = "TIENKUNG_LITE_USD_REL_PATH"
+DEFAULT_USD_REL_PATH = Path("urdf") / "humanoid_publish" / "humanoid_publish.usd"
+
+
+def _resolve_usd_path() -> Path:
+    configured_rel_path = os.getenv(USD_REL_PATH_ENV_VAR)
+    if configured_rel_path:
+        return ASSET_DIR / Path(configured_rel_path)
+    return ASSET_DIR / DEFAULT_USD_REL_PATH
+
+
+USD_PATH = _resolve_usd_path()
 
 REAL_LITE_ARTICULATION_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
-        usd_path=str(ASSET_DIR / "urdf" / "humanoid_publish" / "humanoid_publish.usd"),
+        usd_path=str(USD_PATH),
         activate_contact_sensors=True,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
