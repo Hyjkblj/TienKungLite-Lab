@@ -25,6 +25,28 @@ LINK_ALIAS_MAP = {
     "elbow_pitch_r_link": "elbow_r_link",
 }
 INERTIA_ATTRS = ("ixx", "ixy", "ixz", "iyy", "iyz", "izz")
+REFERENCE_ANKLE_ROLL_COLLISION_SPECS = {
+    "ankle_roll_l_link": (
+        {
+            "origin": {"xyz": "0.035 0.025 -0.042", "rpy": "0 1.5708 0"},
+            "geometry": ("cylinder", {"length": "0.23", "radius": "0.015"}),
+        },
+        {
+            "origin": {"xyz": "0.035 -0.025 -0.042", "rpy": "0 1.5708 0"},
+            "geometry": ("cylinder", {"length": "0.23", "radius": "0.015"}),
+        },
+    ),
+    "ankle_roll_r_link": (
+        {
+            "origin": {"xyz": "0.035 0.025 -0.042", "rpy": "0 1.5708 0"},
+            "geometry": ("cylinder", {"length": "0.23", "radius": "0.015"}),
+        },
+        {
+            "origin": {"xyz": "0.035 -0.025 -0.042", "rpy": "0 1.5708 0"},
+            "geometry": ("cylinder", {"length": "0.23", "radius": "0.015"}),
+        },
+    ),
+}
 
 
 def _log(message: str) -> None:
@@ -123,6 +145,14 @@ def _parse_args() -> argparse.Namespace:
             "Set mass and inertia to zero for candidate-only fixed links such as waist_link. "
             "Useful after --sync-link-mass to avoid double-counting mass that is already folded into "
             "the reference root chain."
+        ),
+    )
+    parser.add_argument(
+        "--replace-ankle-roll-collisions-with-reference",
+        action="store_true",
+        help=(
+            "Replace ankle_roll link collision geometry with the original TienKung-Lab dual-cylinder "
+            "collision layout instead of the imported mesh collision."
         ),
     )
     return parser.parse_args()
@@ -368,6 +398,26 @@ def _zero_candidate_only_fixed_link_masses(candidate_root: ET.Element, candidate
     return len(changed_links), changed_links
 
 
+def _replace_ankle_roll_collisions_with_reference(candidate_root: ET.Element) -> tuple[int, list[str]]:
+    changed_links: list[str] = []
+    for link in candidate_root.findall("link"):
+        name = link.get("name")
+        if not name or name not in REFERENCE_ANKLE_ROLL_COLLISION_SPECS:
+            continue
+
+        for collision in list(link.findall("collision")):
+            link.remove(collision)
+
+        for collision_spec in REFERENCE_ANKLE_ROLL_COLLISION_SPECS[name]:
+            collision_elem = ET.SubElement(link, "collision")
+            ET.SubElement(collision_elem, "origin", attrib=dict(collision_spec["origin"]))
+            geometry_elem = ET.SubElement(collision_elem, "geometry")
+            geom_tag, geom_attrib = collision_spec["geometry"]
+            ET.SubElement(geometry_elem, geom_tag, attrib=dict(geom_attrib))
+        changed_links.append(name)
+    return len(changed_links), changed_links
+
+
 def _write_xml(output_path: Path, tree: ET.ElementTree) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     indent = getattr(ET, "indent", None)
@@ -472,6 +522,18 @@ def main() -> None:
         )
         if zeroed_extra_fixed_links:
             _log(f"[INFO] zeroed_candidate_only_fixed_links: {', '.join(zeroed_extra_fixed_links)}")
+
+    replaced_ankle_collision_count = 0
+    replaced_ankle_collision_links: list[str] = []
+    if args.replace_ankle_roll_collisions_with_reference:
+        replaced_ankle_collision_count, replaced_ankle_collision_links = _replace_ankle_roll_collisions_with_reference(
+            candidate_root
+        )
+        _log(
+            f"[INFO] replace_ankle_roll_collisions_with_reference: updated {replaced_ankle_collision_count} links"
+        )
+        if replaced_ankle_collision_links:
+            _log(f"[INFO] replaced_ankle_roll_collision_links: {', '.join(replaced_ankle_collision_links)}")
 
     _write_xml(output_urdf, candidate_tree)
     _log("[INFO] Wrote aligned URDF copy.")
