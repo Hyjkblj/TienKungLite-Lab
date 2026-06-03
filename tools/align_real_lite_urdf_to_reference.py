@@ -116,6 +116,15 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Copy reference mass values and scale candidate inertia tensors by the same ratio.",
     )
+    parser.add_argument(
+        "--zero-candidate-only-fixed-link-mass",
+        action="store_true",
+        help=(
+            "Set mass and inertia to zero for candidate-only fixed links such as waist_link. "
+            "Useful after --sync-link-mass to avoid double-counting mass that is already folded into "
+            "the reference root chain."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -331,6 +340,34 @@ def _sync_link_masses(candidate_root: ET.Element, reference_link_masses: dict[st
     return len(changed_links), changed_links
 
 
+def _zero_link_mass_and_inertia(link: ET.Element) -> bool:
+    mass_elem = link.find("./inertial/mass")
+    inertia_elem = link.find("./inertial/inertia")
+    changed = False
+
+    if mass_elem is not None and mass_elem.get("value") != "0":
+        mass_elem.set("value", "0")
+        changed = True
+    if inertia_elem is not None:
+        for attr in INERTIA_ATTRS:
+            if inertia_elem.get(attr) != "0":
+                inertia_elem.set(attr, "0")
+                changed = True
+    return changed
+
+
+def _zero_candidate_only_fixed_link_masses(candidate_root: ET.Element, candidate_only_fixed_links: list[str]) -> tuple[int, list[str]]:
+    changed_links: list[str] = []
+    candidate_only_fixed_link_set = set(candidate_only_fixed_links)
+    for link in candidate_root.findall("link"):
+        name = link.get("name")
+        if not name or name not in candidate_only_fixed_link_set:
+            continue
+        if _zero_link_mass_and_inertia(link):
+            changed_links.append(name)
+    return len(changed_links), changed_links
+
+
 def _write_xml(output_path: Path, tree: ET.ElementTree) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     indent = getattr(ET, "indent", None)
@@ -423,6 +460,18 @@ def main() -> None:
                 "If the converter merges fixed joints, this mass can be folded into the root chain and overshoot "
                 f"the reference total by about {candidate_only_fixed_mass:.6f}."
             )
+
+    zeroed_extra_fixed_link_count = 0
+    zeroed_extra_fixed_links: list[str] = []
+    if args.zero_candidate_only_fixed_link_mass:
+        zeroed_extra_fixed_link_count, zeroed_extra_fixed_links = _zero_candidate_only_fixed_link_masses(
+            candidate_root, candidate_only_fixed_links
+        )
+        _log(
+            f"[INFO] zero_candidate_only_fixed_link_mass: updated {zeroed_extra_fixed_link_count} candidate-only fixed links"
+        )
+        if zeroed_extra_fixed_links:
+            _log(f"[INFO] zeroed_candidate_only_fixed_links: {', '.join(zeroed_extra_fixed_links)}")
 
     _write_xml(output_urdf, candidate_tree)
     _log("[INFO] Wrote aligned URDF copy.")
