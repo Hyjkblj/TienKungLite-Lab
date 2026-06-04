@@ -1,10 +1,51 @@
 import argparse
 import json
 import pickle
+import sys
 from pathlib import Path
 
 import numpy as np
 from scipy.spatial.transform import Rotation
+
+PIPELINE_DIR = Path(__file__).resolve().parents[1]
+if str(PIPELINE_DIR) not in sys.path:
+    sys.path.insert(0, str(PIPELINE_DIR))
+
+from real_lite_lab.constants import (  # noqa: E402
+    DEFAULT_DOF_POS,
+    LEFT_ARM_JOINT_NAMES,
+    POLICY_JOINT_NAMES,
+    RIGHT_ARM_JOINT_NAMES,
+)
+
+
+GMR_TIENKUNGLITE_JOINT_NAMES = (
+    "hip_roll_l_joint",
+    "hip_yaw_l_joint",
+    "hip_pitch_l_joint",
+    "knee_pitch_l_joint",
+    "ankle_pitch_l_joint",
+    "ankle_roll_l_joint",
+    "hip_roll_r_joint",
+    "hip_yaw_r_joint",
+    "hip_pitch_r_joint",
+    "knee_pitch_r_joint",
+    "ankle_pitch_r_joint",
+    "ankle_roll_r_joint",
+    "shoulder_pitch_l_joint",
+    "shoulder_roll_l_joint",
+    "shoulder_yaw_l_joint",
+    "elbow_l_joint",
+    "shoulder_pitch_r_joint",
+    "shoulder_roll_r_joint",
+    "shoulder_yaw_r_joint",
+    "elbow_r_joint",
+)
+SOURCE_JOINT_ORDERS = {
+    "policy": tuple(POLICY_JOINT_NAMES),
+    "gmr_tienkunglite": GMR_TIENKUNGLITE_JOINT_NAMES,
+}
+UPPER_BODY_JOINT_NAMES = tuple(LEFT_ARM_JOINT_NAMES + RIGHT_ARM_JOINT_NAMES)
 
 
 class _NumpyCompatUnpickler(pickle.Unpickler):
@@ -25,6 +66,50 @@ def _load_motion_data(input_pkl: str):
                 raise
             f.seek(0)
             return _NumpyCompatUnpickler(f).load()
+
+
+def _resolve_fps(motion_data: dict, fps: float | None) -> float:
+    if fps is not None:
+        return float(fps)
+    source_fps = motion_data.get("fps")
+    if source_fps is None:
+        return 30.0
+    return float(source_fps)
+
+
+def _resolve_source_order(motion_data: dict, source_order: str) -> str:
+    if source_order != "auto":
+        return source_order
+
+    link_body_list = motion_data.get("link_body_list") or []
+    if (
+        motion_data.get("dof_pos") is not None
+        and np.asarray(motion_data["dof_pos"]).shape[-1] == len(GMR_TIENKUNGLITE_JOINT_NAMES)
+        and "left_hand" in link_body_list
+        and "right_hand" in link_body_list
+        and "elbow_pitch_l_link" in link_body_list
+        and "elbow_pitch_r_link" in link_body_list
+    ):
+        return "gmr_tienkunglite"
+
+    return "policy"
+
+
+def _reorder_joint_matrix(
+    joint_matrix: np.ndarray,
+    *,
+    source_joint_names: tuple[str, ...],
+    target_joint_names: tuple[str, ...] = tuple(POLICY_JOINT_NAMES),
+) -> np.ndarray:
+    joint_matrix = np.asarray(joint_matrix, dtype=np.float64)
+    if joint_matrix.ndim != 2:
+        raise ValueError(f"Expected joint_matrix with shape [T, J], got {joint_matrix.shape}.")
+    if joint_matrix.shape[1] != len(source_joint_names):
+        raise ValueError(
+            f"Expected {len(source_joint_names)} joints for source order, got {joint_matrix.shape[1]}."
+        )
+    source_index = {name: idx for idx, name in enumerate(source_joint_names)}
+    return np.stack([joint_matrix[:, source_index[name]] for name in target_joint_names], axis=1)
 
 
 def quat_conjugate_wxyz(quat: np.ndarray) -> np.ndarray:
@@ -82,6 +167,37 @@ def _normalize_initial_yaw(root_pos: np.ndarray, root_rot_wxyz: np.ndarray) -> t
     return normalized_root_pos, normalized_root_rot_wxyz, initial_yaw
 
 
+def _apply_motion_profile(
+    root_pos: np.ndarray,
+    root_rot_wxyz: np.ndarray,
+    dof_pos: np.ndarray,
+    *,
+    motion_profile: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if motion_profile == "full_body":
+        return root_pos, root_rot_wxyz, dof_pos
+    if motion_profile != "upper_body":
+        raise ValueError(f"Unsupported motion_profile: {motion_profile!r}")
+
+    if root_pos.shape[0] == 0:
+        return root_pos.copy(), root_rot_wxyz.copy(), dof_pos.copy()
+
+    profiled_root_pos = np.repeat(root_pos[:1], root_pos.shape[0], axis=0)
+    profiled_root_rot = np.repeat(root_rot_wxyz[:1], root_rot_wxyz.shape[0], axis=0)
+
+    profiled_dof_pos = np.repeat(
+        np.asarray(DEFAULT_DOF_POS, dtype=np.float64)[np.newaxis, :],
+        dof_pos.shape[0],
+        axis=0,
+    )
+    target_index = {name: idx for idx, name in enumerate(POLICY_JOINT_NAMES)}
+    for joint_name in UPPER_BODY_JOINT_NAMES:
+        joint_idx = target_index[joint_name]
+        profiled_dof_pos[:, joint_idx] = dof_pos[:, joint_idx]
+
+    return profiled_root_pos, profiled_root_rot, profiled_dof_pos
+
+
 def _write_visualization_motion(output_path: Path, frames: np.ndarray, fps: float) -> None:
     payload = {
         "FrameType": "visualization",
@@ -95,18 +211,35 @@ def _write_visualization_motion(output_path: Path, frames: np.ndarray, fps: floa
     output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
-def convert_pkl_to_custom(input_pkl, output_txt, fps, normalize_initial_yaw=True):
-    dt = 1.0 / fps
-
+def convert_pkl_to_custom(
+    input_pkl,
+    output_txt,
+    fps=None,
+    normalize_initial_yaw=True,
+    source_order="auto",
+    motion_profile="full_body",
+):
     motion_data = _load_motion_data(input_pkl)
+    fps = _resolve_fps(motion_data, fps)
+    source_order = _resolve_source_order(motion_data, source_order)
+    dt = 1.0 / fps
 
     root_pos = np.asarray(motion_data["root_pos"], dtype=np.float64)
     root_rot = np.asarray(motion_data["root_rot"], dtype=np.float64)[:, [3, 0, 1, 2]]  # xyzw -> wxyz
-    dof_pos = np.asarray(motion_data["dof_pos"], dtype=np.float64)
+    dof_pos = _reorder_joint_matrix(
+        np.asarray(motion_data["dof_pos"], dtype=np.float64),
+        source_joint_names=SOURCE_JOINT_ORDERS[source_order],
+    )
 
     applied_initial_yaw = 0.0
     if normalize_initial_yaw:
         root_pos, root_rot, applied_initial_yaw = _normalize_initial_yaw(root_pos, root_rot)
+    root_pos, root_rot, dof_pos = _apply_motion_profile(
+        root_pos,
+        root_rot,
+        dof_pos,
+        motion_profile=motion_profile,
+    )
 
     root_lin_vel = (root_pos[1:] - root_pos[:-1]) / dt
     q1_conj = quat_conjugate_wxyz(root_rot[:-1])
@@ -134,6 +267,7 @@ def convert_pkl_to_custom(input_pkl, output_txt, fps, normalize_initial_yaw=True
     _write_visualization_motion(output_path, data_output, fps)
     if normalize_initial_yaw:
         print(f"Normalized initial yaw by {-np.degrees(applied_initial_yaw):.3f} degrees.")
+    print(f"Using fps={fps:.6f}, source_order={source_order}, motion_profile={motion_profile}.")
     print(f"Successfully converted {input_pkl} to {output_txt}")
 
 
@@ -141,7 +275,26 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_pkl", type=str, required=True)
     parser.add_argument("--output_txt", type=str, required=True)
-    parser.add_argument("--fps", type=float, default=30.0)
+    parser.add_argument(
+        "--fps",
+        type=float,
+        default=None,
+        help="Target frame rate. Defaults to the PKL fps field when available.",
+    )
+    parser.add_argument(
+        "--source_order",
+        type=str,
+        default="auto",
+        choices=("auto", *sorted(SOURCE_JOINT_ORDERS)),
+        help="Joint order used inside the PKL dof_pos array.",
+    )
+    parser.add_argument(
+        "--motion_profile",
+        type=str,
+        default="full_body",
+        choices=("full_body", "upper_body"),
+        help="full_body keeps the retargeted whole-body motion; upper_body freezes root and legs at the default stance.",
+    )
     parser.add_argument(
         "--disable_initial_yaw_normalization",
         action="store_true",
@@ -154,4 +307,6 @@ if __name__ == "__main__":
         args.output_txt,
         args.fps,
         normalize_initial_yaw=not args.disable_initial_yaw_normalization,
+        source_order=args.source_order,
+        motion_profile=args.motion_profile,
     )

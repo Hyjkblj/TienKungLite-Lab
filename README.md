@@ -97,6 +97,14 @@ Step 1: convert retargeted PKL data into visualization motion data.
 python scripts/gmr_data_conversion.py --input_pkl <motion.pkl> --output_txt real_lite_lab/datasets/motion_visualization/walk.txt
 ```
 
+For upper-body retarget experiments that follow the original `TienKung-Lab` design, freeze the root and legs at the default stance and only keep the retargeted arm motion:
+
+```bash
+python scripts/gmr_data_conversion.py --input_pkl <motion.pkl> --output_txt real_lite_lab/datasets/motion_visualization/upper_body.txt --motion_profile upper_body
+```
+
+The converter auto-detects `GMR tienkunglite` PKLs and reorders the 20-DoF joint vector into the policy joint order used by this repository.
+
 Step 2: replay the visualization motion and export AMP expert motion if needed.
 
 ```bash
@@ -105,6 +113,13 @@ python scripts/play_amp_animation.py --task walk_real_lite --num_envs 1 --save_p
 ```
 
 The same workflow applies to `run_real_lite`.
+
+For the upper-body task:
+
+```bash
+python scripts/play_amp_animation.py --task upper_body_real_lite --num_envs 1
+python scripts/play_amp_animation.py --task upper_body_real_lite --num_envs 1 --save_path real_lite_lab/datasets/motion_amp_expert/upper_body.txt --fps 30.0
+```
 
 ## MuJoCo Sim2Sim
 
