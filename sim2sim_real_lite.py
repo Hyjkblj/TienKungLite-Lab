@@ -479,6 +479,10 @@ class RealLiteMujocoRunner:
             [mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, name) for name in ISAAC_POLICY_ORDER],
             dtype=np.int32,
         )
+        self.policy_joint_dofadrs = np.asarray(
+            [int(self.model.jnt_dofadr[joint_id]) for joint_id in self.policy_joint_ids],
+            dtype=np.int32,
+        )
         hard_joint_ranges = np.asarray(self.model.jnt_range[self.policy_joint_ids], dtype=np.float64)
         hard_joint_mid = np.mean(hard_joint_ranges, axis=1)
         hard_joint_half = (
@@ -751,6 +755,7 @@ class RealLiteMujocoRunner:
             ),
             "joint_pos_isaac": self.dof_pos[self.mujoco_to_isaac_idx].astype(np.float64).copy(),
             "joint_vel_isaac": self.dof_vel[self.mujoco_vel_to_isaac_idx].astype(np.float64).copy(),
+            "joint_torque_isaac": np.asarray(self.data.qfrc_actuator[self.policy_joint_dofadrs], dtype=np.float64).copy(),
             "action": self.action.astype(np.float64).copy(),
             "policy_target_isaac": self.last_policy_target.astype(np.float64).copy(),
             "clamped_target_isaac": self.last_clamped_policy_target.astype(np.float64).copy(),

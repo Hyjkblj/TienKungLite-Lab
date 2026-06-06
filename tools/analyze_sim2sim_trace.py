@@ -179,6 +179,7 @@ def analyze_trace(
     projected_gravity = np.asarray(trace["projected_gravity"], dtype=np.float64)
     angular_velocity = np.asarray(trace["angular_velocity"], dtype=np.float64)
     joint_vel = np.asarray(trace["joint_vel_isaac"], dtype=np.float64)
+    joint_torque = np.asarray(trace.get("joint_torque_isaac"), dtype=np.float64) if "joint_torque_isaac" in trace else None
     joint_pos = np.asarray(trace.get("joint_pos_isaac"), dtype=np.float64) if "joint_pos_isaac" in trace else None
     policy_target = np.asarray(trace.get("policy_target_isaac"), dtype=np.float64) if "policy_target_isaac" in trace else None
     standing_target = (
@@ -292,6 +293,14 @@ def analyze_trace(
             f"max={ctrl_range[max_ctrl_range_idx]:.4f} at {times[max_ctrl_range_idx]:.3f}s"
         )
 
+    if joint_torque is not None:
+        joint_torque_abs = np.max(np.abs(joint_torque), axis=1)
+        max_joint_torque_idx = int(np.argmax(joint_torque_abs))
+        lines.append(
+            f"joint_torque_abs_max: start={joint_torque_abs[0]:.4f}, end={joint_torque_abs[-1]:.4f}, "
+            f"max={joint_torque_abs[max_joint_torque_idx]:.4f} at {times[max_joint_torque_idx]:.3f}s"
+        )
+
     target_clip = None
     target_clip_event_idx = None
     if policy_target is not None and clamped_target is not None:
@@ -340,6 +349,8 @@ def analyze_trace(
         if left_load_share is not None:
             lines.append(f"{label} left_load_share: {left_load_share[index]:.3f}")
         lines.append(f"{label} top_joint_vel: {_top_joint_table(joint_vel[index])}")
+        if joint_torque is not None:
+            lines.append(f"{label} top_joint_torque: {_top_joint_table(joint_torque[index])}")
         if joint_pos is not None:
             reference_standing_target = standing_target[0] if standing_target.ndim == 2 else standing_target
             joint_pos_error = joint_pos[index] - reference_standing_target
