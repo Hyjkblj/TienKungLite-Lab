@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+
+import numpy as np
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -42,6 +45,29 @@ class RunIsaacStandingSweepTests(unittest.TestCase):
         label = module._build_variant_label(config, ("root_z", "ankle_pitch_kp_scale", "ankle_pitch_kd_scale"))
 
         self.assertEqual(label, "rz_0p96__apkp_2__apkd_3")
+
+    def test_extract_metrics_reports_torque_maxima(self) -> None:
+        module = load_sweep_module()
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trace_path = Path(tmp_dir) / "trace.npz"
+            np.savez_compressed(
+                trace_path,
+                sim_time=np.array([0.0, 0.5], dtype=np.float64),
+                root_pos=np.array([[0.0, 0.0, 0.8], [0.0, 0.0, 0.7]], dtype=np.float64),
+                projected_gravity=np.array([[0.0, 0.0, -1.0], [0.8, 0.0, -0.2]], dtype=np.float64),
+                foot_normal_forces=np.array([[100.0, 100.0], [50.0, 60.0]], dtype=np.float64),
+                termination_contact=np.array([False, True], dtype=bool),
+                joint_applied_torque_policy=np.array([[1.0, -2.0], [3.0, -60.0]], dtype=np.float64),
+                joint_computed_torque_policy=np.array([[1.0, -2.0], [3.0, -75.0]], dtype=np.float64),
+            )
+
+            metrics = module._extract_metrics(trace_path, height_drop_threshold=0.05, tilt_threshold_deg=20.0)
+
+        self.assertEqual(metrics["applied_torque_abs_max"], 60.0)
+        self.assertEqual(metrics["applied_torque_abs_max_time"], 0.5)
+        self.assertEqual(metrics["applied_torque_abs_max_joint"], "hip_pitch_l_joint")
+        self.assertEqual(metrics["computed_torque_abs_max"], 75.0)
 
 
 if __name__ == "__main__":

@@ -12,6 +12,10 @@ import numpy as np
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from real_lite_lab.constants import POLICY_JOINT_NAMES  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -87,6 +91,39 @@ def _tilt_deg_from_projected_gravity(projected_gravity: np.ndarray) -> np.ndarra
     return np.degrees(np.arccos(cos_theta))
 
 
+def _joint_signal_metrics(
+    trace: dict[str, np.ndarray],
+    *,
+    trace_key: str,
+    label: str,
+    times: np.ndarray,
+) -> dict[str, object]:
+    if trace_key not in trace:
+        return {
+            f"{label}_abs_max": None,
+            f"{label}_abs_max_time": None,
+            f"{label}_abs_max_joint": None,
+        }
+
+    values = np.asarray(trace[trace_key], dtype=np.float64)
+    if values.ndim != 2 or not np.any(np.isfinite(values)):
+        return {
+            f"{label}_abs_max": None,
+            f"{label}_abs_max_time": None,
+            f"{label}_abs_max_joint": None,
+        }
+
+    finite_abs = np.where(np.isfinite(values), np.abs(values), np.nan)
+    flat_index = int(np.nanargmax(finite_abs))
+    frame_idx, joint_idx = np.unravel_index(flat_index, finite_abs.shape)
+    joint_name = POLICY_JOINT_NAMES[joint_idx] if joint_idx < len(POLICY_JOINT_NAMES) else f"joint_{joint_idx}"
+    return {
+        f"{label}_abs_max": float(finite_abs[frame_idx, joint_idx]),
+        f"{label}_abs_max_time": float(times[frame_idx]),
+        f"{label}_abs_max_joint": joint_name,
+    }
+
+
 def _extract_metrics(trace_path: Path, *, height_drop_threshold: float, tilt_threshold_deg: float) -> dict[str, object]:
     with np.load(trace_path) as data:
         trace = {key: data[key] for key in data.files}
@@ -125,6 +162,22 @@ def _extract_metrics(trace_path: Path, *, height_drop_threshold: float, tilt_thr
         "foot_force_total_end": float(total_foot_force[-1]),
         "foot_force_total_min": float(np.min(total_foot_force)),
     }
+    metrics.update(
+        _joint_signal_metrics(
+            trace,
+            trace_key="joint_applied_torque_policy",
+            label="applied_torque",
+            times=times,
+        )
+    )
+    metrics.update(
+        _joint_signal_metrics(
+            trace,
+            trace_key="joint_computed_torque_policy",
+            label="computed_torque",
+            times=times,
+        )
+    )
     if feet_pos_w is not None:
         foot_z = feet_pos_w[:, :, 2]
         metrics["feet_z_start"] = foot_z[0].astype(np.float64).tolist()
@@ -310,6 +363,12 @@ def main() -> None:
         "foot_force_total_start",
         "foot_force_total_end",
         "foot_force_total_min",
+        "applied_torque_abs_max",
+        "applied_torque_abs_max_time",
+        "applied_torque_abs_max_joint",
+        "computed_torque_abs_max",
+        "computed_torque_abs_max_time",
+        "computed_torque_abs_max_joint",
         "feet_z_start",
         "feet_z_end",
         "feet_z_min",
@@ -332,7 +391,8 @@ def main() -> None:
             f"termination={_stringify_metric(row.get('termination_contact_time')) or 'not_reached'}s, "
             f"drop={_stringify_metric(row.get('root_drop_time')) or 'not_reached'}s, "
             f"tilt20={_stringify_metric(row.get('tilt_20_time')) or 'not_reached'}s, "
-            f"tilt45={_stringify_metric(row.get('tilt_45_time')) or 'not_reached'}s"
+            f"tilt45={_stringify_metric(row.get('tilt_45_time')) or 'not_reached'}s, "
+            f"applied_tau_max={_stringify_metric(row.get('applied_torque_abs_max')) or 'n/a'}"
         )
 
 
