@@ -85,6 +85,9 @@ class RunIsaacStandingSweepTests(unittest.TestCase):
         self.assertAlmostEqual(metrics["com_x_minus_feet_center_start"], 0.02)
         self.assertAlmostEqual(metrics["com_x_minus_feet_center_end"], 0.08)
         self.assertAlmostEqual(metrics["com_y_minus_feet_center_end"], 0.04)
+        self.assertAlmostEqual(metrics["com_x_minus_feet_center_tilt20"], 0.08)
+        self.assertAlmostEqual(metrics["com_x_minus_feet_center_drop"], 0.08)
+        self.assertAlmostEqual(metrics["com_x_minus_feet_center_termination"], 0.08)
 
 
 if __name__ == "__main__":

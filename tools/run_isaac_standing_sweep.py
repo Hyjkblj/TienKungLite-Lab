@@ -241,6 +241,19 @@ def _extract_metrics(trace_path: Path, *, height_drop_threshold: float, tilt_thr
                 metrics["com_y_minus_feet_center_end"] = float(com_xy_minus_feet_center_xy[-1, 1])
                 metrics["com_xy_minus_feet_center_norm_max"] = float(com_xy_minus_feet_center_norm[max_idx])
                 metrics["com_xy_minus_feet_center_norm_max_time"] = float(times[max_idx])
+                for event_label, event_idx in (
+                    ("tilt20", tilt_20_idx),
+                    ("drop", root_drop_idx),
+                    ("termination", termination_idx),
+                ):
+                    if event_idx is None:
+                        continue
+                    metrics[f"com_x_minus_feet_center_{event_label}"] = float(
+                        com_xy_minus_feet_center_xy[event_idx, 0]
+                    )
+                    metrics[f"com_y_minus_feet_center_{event_label}"] = float(
+                        com_xy_minus_feet_center_xy[event_idx, 1]
+                    )
     return metrics
 
 
@@ -442,6 +455,12 @@ def main() -> None:
         "com_y_minus_feet_center_end",
         "com_xy_minus_feet_center_norm_max",
         "com_xy_minus_feet_center_norm_max_time",
+        "com_x_minus_feet_center_tilt20",
+        "com_y_minus_feet_center_tilt20",
+        "com_x_minus_feet_center_drop",
+        "com_y_minus_feet_center_drop",
+        "com_x_minus_feet_center_termination",
+        "com_y_minus_feet_center_termination",
         "duration",
         "trace_path",
         "log_path",

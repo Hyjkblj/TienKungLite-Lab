@@ -264,6 +264,24 @@ python tools/run_isaac_standing_sweep.py \
 
 In the summary, reject rows whose `foot_force_total_start` is near zero even if their `start_*` metrics look perfect.
 
+When one root height falls forward and a lower height falls backward, run a narrow root/ankle sweep and compare the signed `com_x_minus_feet_center_tilt20/drop/termination` columns:
+
+```bash
+cd /ai/users/huangwy/exp2/TienKungLite-Lab
+export TIENKUNG_LITE_USD_REL_PATH=urdf/humanoid_publish_free_base/humanoid_publish_free_base.usd
+python tools/run_isaac_standing_sweep.py \
+  --run-dir logs/standing/isaac_rootz_ankle_balance_$(date +%Y%m%d_%H%M%S) \
+  --duration 5 \
+  --settle-time 0 \
+  --root-zs 0.772 0.774 0.776 0.778 0.780 0.782 \
+  --hip-pitch-targets -0.55 \
+  --knee-pitch-targets 1.00 \
+  --ankle-pitch-targets -0.52 -0.50 -0.48 \
+  --ankle-pitch-kd-scales 3.0
+```
+
+Prefer rows with non-zero `foot_force_total_start`, later/no `tilt_20_time`, and smaller signed COM drift at the first failure event.
+
 Only after Isaac free-base hold is stable should MuJoCo hold be used as a sim2sim check:
 
 ```bash
