@@ -30,9 +30,15 @@ PY
     )"
   fi
   echo "[INFO] generating reference-feet URDF: ${REFERENCE_FEET_URDF}"
+  REFERENCE_FEET_ARGS=(--reference-feet-only --output-urdf "${REFERENCE_FEET_URDF}")
+  if [[ -n "${REFERENCE_FEET_SUPPORT_X:-}" ]]; then
+    REFERENCE_FEET_ARGS+=(--reference-feet-support-x "${REFERENCE_FEET_SUPPORT_X}")
+  fi
+  if [[ -n "${REFERENCE_FEET_SUPPORT_LENGTH:-}" ]]; then
+    REFERENCE_FEET_ARGS+=(--reference-feet-support-length "${REFERENCE_FEET_SUPPORT_LENGTH}")
+  fi
   python tools/align_real_lite_urdf_to_reference.py \
-    --reference-feet-only \
-    --output-urdf "${REFERENCE_FEET_URDF}"
+    "${REFERENCE_FEET_ARGS[@]}"
   REEXPORT_ARGS+=(--urdf_path "${REFERENCE_FEET_URDF}")
   AUDIT_ARGS+=(--urdf "${REFERENCE_FEET_URDF}")
 fi

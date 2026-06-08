@@ -185,6 +185,24 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--reference-feet-support-x",
+        type=float,
+        default=None,
+        help=(
+            "Optional x center override for the reference ankle-roll foot support cylinders. "
+            "Use only for support-polygon diagnostics."
+        ),
+    )
+    parser.add_argument(
+        "--reference-feet-support-length",
+        type=float,
+        default=None,
+        help=(
+            "Optional length override for the reference ankle-roll foot support cylinders. "
+            "Use only for support-polygon diagnostics."
+        ),
+    )
+    parser.add_argument(
         "--replace-ankle-roll-collisions-with-reference",
         action="store_true",
         help=(
@@ -545,6 +563,42 @@ def _replace_collision_links_with_reference(
     return len(changed_links), changed_links, missing_links, unavailable_links
 
 
+def _with_reference_foot_support_overrides(
+    reference_collision_specs: dict[str, tuple[dict[str, object], ...]],
+    *,
+    support_x: float | None,
+    support_length: float | None,
+) -> dict[str, tuple[dict[str, object], ...]]:
+    if support_x is None and support_length is None:
+        return reference_collision_specs
+
+    updated: dict[str, tuple[dict[str, object], ...]] = {}
+    for link_name, specs in reference_collision_specs.items():
+        updated_specs: list[dict[str, object]] = []
+        for spec in specs:
+            copied_spec = {
+                key: ({**value} if isinstance(value, dict) else value)
+                for key, value in spec.items()
+            }
+            copied_spec["origin"] = dict(spec.get("origin", {}))
+            geometry = dict(spec.get("geometry", {}))
+            geometry["attrib"] = dict(geometry.get("attrib", {}))
+            copied_spec["geometry"] = geometry
+
+            if link_name in {"ankle_roll_l_link", "ankle_roll_r_link"} and geometry.get("tag") == "cylinder":
+                if support_x is not None:
+                    xyz = str(copied_spec["origin"].get("xyz", "0 0 0")).split()
+                    if len(xyz) != 3:
+                        xyz = ["0", "0", "0"]
+                    xyz[0] = f"{float(support_x):g}"
+                    copied_spec["origin"]["xyz"] = " ".join(xyz)
+                if support_length is not None:
+                    geometry["attrib"]["length"] = f"{float(support_length):g}"
+            updated_specs.append(copied_spec)
+        updated[link_name] = tuple(updated_specs)
+    return updated
+
+
 def _write_xml(output_path: Path, tree: ET.ElementTree) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     indent = getattr(ET, "indent", None)
@@ -584,9 +638,21 @@ def main() -> None:
         reference_link_names = _build_reference_link_names_from_snapshot()
         reference_source = f"snapshot:{REFERENCE_TIENKUNG2_LITE_SNAPSHOT['source_hint']}"
 
+    reference_collision_specs = _with_reference_foot_support_overrides(
+        reference_collision_specs,
+        support_x=args.reference_feet_support_x,
+        support_length=args.reference_feet_support_length,
+    )
+
     _log(f"[INFO] reference_source: {reference_source}")
     _log(f"[INFO] candidate_urdf: {candidate_urdf}")
     _log(f"[INFO] output_urdf: {output_urdf}")
+    if args.reference_feet_support_x is not None or args.reference_feet_support_length is not None:
+        _log(
+            "[INFO] reference_feet_support_override: "
+            f"x={args.reference_feet_support_x if args.reference_feet_support_x is not None else 'reference'}, "
+            f"length={args.reference_feet_support_length if args.reference_feet_support_length is not None else 'reference'}"
+        )
     fixed_joint_children = _build_fixed_joint_children(candidate_root)
 
     candidate_only_fixed_links: list[str] = []

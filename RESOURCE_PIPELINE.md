@@ -195,6 +195,27 @@ bash scripts/server_resource_pipeline.sh
 
 In the output, compare `root_xy_minus_feet_center_xy` with `com_xy_minus_feet_center_xy` at `tilt_event` and `drop_event`.
 
+If COM itself moves forward past the support center, run a clearly marked support-polygon diagnostic. This does not claim to be the final physical foot model; it only tests whether a longer/more-forward primitive support contact can stop the forward fall:
+
+```bash
+cd /ai/users/huangwy/exp2/TienKungLite-Lab
+git pull --ff-only origin main
+USE_REFERENCE_FEET_COLLISIONS=1 \
+REFERENCE_FEET_SUPPORT_X=0.07 \
+REFERENCE_FEET_SUPPORT_LENGTH=0.34 \
+ISAAC_HOLD_DURATION=8 \
+ISAAC_SETTLE_TIME=0 \
+ISAAC_ROOT_Z=0.785 \
+ISAAC_HIP_PITCH_TARGET=-0.50 \
+ISAAC_KNEE_PITCH_TARGET=0.90 \
+ISAAC_ANKLE_PITCH_TARGET=-0.50 \
+ISAAC_ANKLE_PITCH_KD_SCALE=2.0 \
+REQUIRE_STABLE=0 \
+bash scripts/server_resource_pipeline.sh
+```
+
+If this increases the hold time materially, the next asset task is to define a realistic sole/toe collision model instead of continuing to tune PPO or PD blindly.
+
 Only after Isaac free-base hold is stable should MuJoCo hold be used as a sim2sim check:
 
 ```bash

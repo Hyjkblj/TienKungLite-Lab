@@ -67,6 +67,13 @@ def _collision_tags(root: ET.Element, link_name: str) -> list[str]:
     return tags
 
 
+def _collision_elements(root: ET.Element, link_name: str) -> list[ET.Element]:
+    link = root.find(f"./link[@name='{link_name}']")
+    if link is None:
+        raise AssertionError(f"link not found: {link_name}")
+    return list(link.findall("collision"))
+
+
 class AlignRealLiteUrdfToReferenceTests(unittest.TestCase):
     def test_reference_feet_only_replaces_feet_without_syncing_joint_limits(self) -> None:
         module = load_module()
@@ -119,6 +126,40 @@ class AlignRealLiteUrdfToReferenceTests(unittest.TestCase):
                 module.main()
 
             self.assertTrue(candidate_urdf.with_name("humanoid_publish.reference_feet.urdf").is_file())
+
+    def test_reference_feet_support_overrides_update_cylinder_x_and_length(self) -> None:
+        module = load_module()
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            candidate_urdf = tmp_path / "asset" / "urdf" / "humanoid_publish.urdf"
+            output_urdf = tmp_path / "asset" / "urdf" / "humanoid_publish.reference_feet.urdf"
+            _write_candidate_urdf(candidate_urdf)
+
+            argv = [
+                "align_real_lite_urdf_to_reference.py",
+                "--reference-feet-only",
+                "--reference-feet-support-x",
+                "0.07",
+                "--reference-feet-support-length",
+                "0.34",
+                "--candidate-urdf",
+                str(candidate_urdf),
+                "--output-urdf",
+                str(output_urdf),
+            ]
+            with mock.patch.object(sys, "argv", argv):
+                module.main()
+
+            root = ET.parse(output_urdf).getroot()
+
+        for collision in _collision_elements(root, "ankle_roll_l_link") + _collision_elements(root, "ankle_roll_r_link"):
+            origin = collision.find("origin")
+            cylinder = collision.find("./geometry/cylinder")
+            self.assertIsNotNone(origin)
+            self.assertIsNotNone(cylinder)
+            self.assertEqual(origin.get("xyz").split()[0], "0.07")
+            self.assertEqual(cylinder.get("length"), "0.34")
 
 
 if __name__ == "__main__":
