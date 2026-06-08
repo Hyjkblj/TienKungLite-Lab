@@ -246,6 +246,24 @@ python tools/run_isaac_standing_sweep.py \
 
 Prefer candidates that reduce `start_joint_speed_abs_max`, `start_joint_pos_error_abs_max`, and `start_applied_torque_abs_max` without making `tilt_20_time` earlier.
 
+If a zero-start-speed candidate also reports `foot_force_total_start=0`, do not treat it as grounded static balance yet. First sweep `root_z` around that pose and prefer rows with non-zero initial foot force and lower start-state velocity/torque:
+
+```bash
+cd /ai/users/huangwy/exp2/TienKungLite-Lab
+export TIENKUNG_LITE_USD_REL_PATH=urdf/humanoid_publish_free_base/humanoid_publish_free_base.usd
+python tools/run_isaac_standing_sweep.py \
+  --run-dir logs/standing/isaac_rootz_static_contact_$(date +%Y%m%d_%H%M%S) \
+  --duration 3 \
+  --settle-time 0 \
+  --root-zs 0.760 0.770 0.780 0.785 0.790 \
+  --hip-pitch-targets -0.55 \
+  --knee-pitch-targets 1.00 \
+  --ankle-pitch-targets -0.50 \
+  --ankle-pitch-kd-scales 2.0 3.0 4.0
+```
+
+In the summary, reject rows whose `foot_force_total_start` is near zero even if their `start_*` metrics look perfect.
+
 Only after Isaac free-base hold is stable should MuJoCo hold be used as a sim2sim check:
 
 ```bash
