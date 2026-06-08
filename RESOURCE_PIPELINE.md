@@ -282,6 +282,24 @@ python tools/run_isaac_standing_sweep.py \
 
 Prefer rows with non-zero `foot_force_total_start`, later/no `tilt_20_time`, and smaller signed COM drift at the first failure event.
 
+If the best pose remains stuck around a few seconds and neighboring `root_z` values flip between forward and backward falls, stop broad pose sweeps and test asset physics variants at the same pose. This isolates whether the blocker is foot collision, reference mass/inertia alignment, or candidate-only fixed-link mass folded into the pelvis during USD import:
+
+```bash
+cd /ai/users/huangwy/exp2/TienKungLite-Lab
+git pull --ff-only origin main
+python tools/run_isaac_asset_variant_sweep.py \
+  --run-dir logs/standing/isaac_asset_variant_$(date +%Y%m%d_%H%M%S) \
+  --duration 8 \
+  --settle-time 0 \
+  --root-z 0.782 \
+  --hip-pitch-target -0.55 \
+  --knee-pitch-target 1.00 \
+  --ankle-pitch-target -0.50 \
+  --ankle-pitch-kd-scale 3.0
+```
+
+Ranked output is written to `isaac_asset_variant_summary.csv`. If `reference_feet_mass_zero_fixed` or `reference_aligned_mass_zero_fixed` clearly outperforms `reference_feet`, treat the standing issue as an asset mass/inertia/import problem before doing more PPO or pose sweeps.
+
 Only after Isaac free-base hold is stable should MuJoCo hold be used as a sim2sim check:
 
 ```bash
