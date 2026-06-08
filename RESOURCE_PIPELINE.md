@@ -97,6 +97,16 @@ python tools/run_isaac_standing_sweep.py \
   --ankle-pitch-targets -0.42 -0.50
 ```
 
+Use the generated traces to estimate a grounded root height. The current Real Lite USD tends to report grounded foot body origins around `z=0.05m`, so traces whose initial `feet_z_w` is much higher are still falling from the air:
+
+```bash
+cd /ai/users/huangwy/exp2/TienKungLite-Lab
+python tools/recommend_isaac_root_height.py \
+  logs/standing/isaac_pose_sweep_*/isaac_standing_*.npz \
+  --target-foot-z 0.05 \
+  --csv-out logs/standing/isaac_root_height_recommendations.csv
+```
+
 After choosing the best pose row from `*_summary.csv`, sweep a small PD matrix around that pose:
 
 ```bash
