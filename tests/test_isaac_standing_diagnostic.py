@@ -66,6 +66,7 @@ class IsaacStandingDiagnosticTests(unittest.TestCase):
             support_hold_steps=2,
         )
         joined = "\n".join(lines)
+        self.assertIn("start_state@0.000s", joined)
         self.assertIn("termination contact: step=2, time=1.000s", joined)
         self.assertIn("loaded double support lost for 2 frames: not reached", joined)
 
@@ -162,6 +163,7 @@ class IsaacStandingDiagnosticTests(unittest.TestCase):
         )
 
         joined = "\n".join(lines)
+        self.assertIn("start_state top_joint_applied_torque: ankle_pitch_l_joint=-2.0000", joined)
         self.assertIn("joint_applied_torque_abs_max: start=2.0000", joined)
         self.assertIn("termination_contact top_joint_applied_torque: ankle_pitch_l_joint=-60.0000", joined)
         self.assertIn("termination_contact top_joint_computed_torque: ankle_pitch_l_joint=-80.0000", joined)

@@ -216,6 +216,16 @@ bash scripts/server_resource_pipeline.sh
 
 If this increases the hold time materially, the next asset task is to define a realistic sole/toe collision model instead of continuing to tune PPO or PD blindly.
 
+If the support-polygon diagnostic does not improve the hold, inspect the saved trace offline before running more sweeps:
+
+```bash
+cd /ai/users/huangwy/exp2/TienKungLite-Lab
+git pull --ff-only origin main
+python tools/analyze_isaac_standing_trace.py logs/standing/isaac_freebase_baseline.npz
+```
+
+Focus on `start_state top_joint_vel`, `start_state top_joint_pos_error`, and `start_state top_joint_applied_torque`; large initial sagittal velocities/errors mean the pose is not a static equilibrium even before the visible fall.
+
 Only after Isaac free-base hold is stable should MuJoCo hold be used as a sim2sim check:
 
 ```bash

@@ -327,6 +327,7 @@ def summarize_standing_trace(
                 )
 
     for label, index in (
+        ("start_state", 0),
         ("termination_contact", termination_contact_idx),
         ("tilt_event", tilt_event_idx),
         ("drop_event", drop_event_idx),
