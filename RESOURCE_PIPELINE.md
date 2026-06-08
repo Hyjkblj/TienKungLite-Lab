@@ -149,12 +149,31 @@ If the audit still reports mesh-only foot contact, generate a safer URDF copy wi
 ```bash
 cd /ai/users/huangwy/exp2/TienKungLite-Lab
 python tools/align_real_lite_urdf_to_reference.py \
-  --replace-ankle-roll-collisions-with-reference \
-  --output-urdf /ai/users/huangwy/exp2/robot_assets/real_lite_lab_active/urdf/humanoid_publish.reference_feet.urdf
+  --reference-feet-only
 python tools/reexport_real_lite_usd.py \
   --headless \
   --force \
-  --urdf_path /ai/users/huangwy/exp2/robot_assets/real_lite_lab_active/urdf/humanoid_publish.reference_feet.urdf
+  --urdf_path "$(python - <<'PY'
+from real_lite_lab.assets import resolve_real_lite_asset_root
+print(resolve_real_lite_asset_root() / "urdf" / "humanoid_publish.reference_feet.urdf")
+PY
+)"
+```
+
+For the current IsaacLab standing issue, use the script switch below to run the same export, audit, and no-action hold without changing joint limits or mass:
+
+```bash
+cd /ai/users/huangwy/exp2/TienKungLite-Lab
+USE_REFERENCE_FEET_COLLISIONS=1 \
+ISAAC_HOLD_DURATION=8 \
+ISAAC_SETTLE_TIME=0 \
+ISAAC_ROOT_Z=0.785 \
+ISAAC_HIP_PITCH_TARGET=-0.50 \
+ISAAC_KNEE_PITCH_TARGET=0.90 \
+ISAAC_ANKLE_PITCH_TARGET=-0.50 \
+ISAAC_ANKLE_PITCH_KD_SCALE=2.0 \
+REQUIRE_STABLE=0 \
+bash scripts/server_resource_pipeline.sh
 ```
 
 Only after Isaac free-base hold is stable should MuJoCo hold be used as a sim2sim check:

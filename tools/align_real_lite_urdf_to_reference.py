@@ -177,6 +177,14 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--reference-feet-only",
+        action="store_true",
+        help=(
+            "Only replace ankle_roll_l/r_link collisions with the reference primitive foot contacts. "
+            "This leaves joint limits, masses, and non-foot collision topology unchanged."
+        ),
+    )
+    parser.add_argument(
         "--replace-ankle-roll-collisions-with-reference",
         action="store_true",
         help=(
@@ -206,21 +214,26 @@ def _parse_args() -> argparse.Namespace:
 
 def _resolve_paths(args: argparse.Namespace) -> tuple[Path, Path, Path]:
     reference_root = Path(args.reference_asset_root).expanduser().resolve()
-    candidate_root = Path(args.candidate_asset_root).expanduser().resolve() if args.candidate_asset_root else resolve_real_lite_asset_root()
     reference_urdf = (
         Path(args.reference_urdf).expanduser().resolve()
         if args.reference_urdf
         else reference_root / "urdf" / "tienkung2_lite.urdf"
     )
-    candidate_urdf = (
-        Path(args.candidate_urdf).expanduser().resolve()
-        if args.candidate_urdf
-        else candidate_root / "urdf" / "humanoid_publish.urdf"
-    )
+    if args.candidate_urdf:
+        candidate_urdf = Path(args.candidate_urdf).expanduser().resolve()
+    else:
+        candidate_root = (
+            Path(args.candidate_asset_root).expanduser().resolve()
+            if args.candidate_asset_root
+            else resolve_real_lite_asset_root()
+        )
+        candidate_urdf = candidate_root / "urdf" / "humanoid_publish.urdf"
     output_urdf = (
         Path(args.output_urdf).expanduser().resolve()
         if args.output_urdf
-        else candidate_urdf.with_name(f"{candidate_urdf.stem}.reference_aligned.urdf")
+        else candidate_urdf.with_name(
+            f"{candidate_urdf.stem}.{'reference_feet' if args.reference_feet_only else 'reference_aligned'}.urdf"
+        )
     )
 
     if not reference_urdf.is_file() and _reference_override_requested():
@@ -542,6 +555,13 @@ def _write_xml(output_path: Path, tree: ET.ElementTree) -> None:
 
 def main() -> None:
     args = _parse_args()
+    if args.reference_feet_only:
+        args.sync_collision_topology = False
+        args.sync_joint_limits = False
+        args.sync_link_mass = False
+        args.zero_candidate_only_fixed_link_mass = False
+        args.replace_ankle_roll_collisions_with_reference = True
+
     reference_urdf, candidate_urdf, output_urdf = _resolve_paths(args)
 
     candidate_tree = ET.parse(candidate_urdf)

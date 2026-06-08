@@ -9,19 +9,41 @@ MUJOCO_HOLD_DURATION="${MUJOCO_HOLD_DURATION:-30}"
 INSTALL_SIM2SIM="${INSTALL_SIM2SIM:-0}"
 REQUIRE_STABLE="${REQUIRE_STABLE:-1}"
 MUJOCO_VIDEO_PATH="${MUJOCO_VIDEO_PATH:-logs/standing/mujoco_hold_${MUJOCO_HOLD_DURATION}s.mp4}"
+USE_REFERENCE_FEET_COLLISIONS="${USE_REFERENCE_FEET_COLLISIONS:-0}"
+REFERENCE_FEET_URDF="${REFERENCE_FEET_URDF:-}"
+USD_REL_PATH="${USD_REL_PATH:-urdf/humanoid_publish_free_base/humanoid_publish_free_base.usd}"
 
 cd "${SERVER_REPO}"
 
 echo "[INFO] repo: ${SERVER_REPO}"
 echo "[INFO] task: ${TASK}"
 echo "[INFO] exporting free-base USD"
-python tools/reexport_real_lite_usd.py --headless --force
+REEXPORT_ARGS=(--headless --force)
+AUDIT_ARGS=()
+if [[ "${USE_REFERENCE_FEET_COLLISIONS}" == "1" ]]; then
+  if [[ -z "${REFERENCE_FEET_URDF}" ]]; then
+    REFERENCE_FEET_URDF="$(
+      python - <<'PY'
+from real_lite_lab.assets import resolve_real_lite_asset_root
+print(resolve_real_lite_asset_root() / "urdf" / "humanoid_publish.reference_feet.urdf")
+PY
+    )"
+  fi
+  echo "[INFO] generating reference-feet URDF: ${REFERENCE_FEET_URDF}"
+  python tools/align_real_lite_urdf_to_reference.py \
+    --reference-feet-only \
+    --output-urdf "${REFERENCE_FEET_URDF}"
+  REEXPORT_ARGS+=(--urdf_path "${REFERENCE_FEET_URDF}")
+  AUDIT_ARGS+=(--urdf "${REFERENCE_FEET_URDF}")
+fi
 
-export TIENKUNG_LITE_USD_REL_PATH="urdf/humanoid_publish_free_base/humanoid_publish_free_base.usd"
+python tools/reexport_real_lite_usd.py "${REEXPORT_ARGS[@]}"
+
+export TIENKUNG_LITE_USD_REL_PATH="${USD_REL_PATH}"
 echo "[INFO] TIENKUNG_LITE_USD_REL_PATH=${TIENKUNG_LITE_USD_REL_PATH}"
 
 echo "[INFO] auditing resource pipeline"
-python tools/audit_real_lite_resource_pipeline.py --strict
+python tools/audit_real_lite_resource_pipeline.py --strict "${AUDIT_ARGS[@]}"
 
 echo "[INFO] running Isaac free-base standing diagnostic"
 ISAAC_STABILITY_ARGS=()
