@@ -77,6 +77,59 @@ def _joint_value_summary(values: np.ndarray, indices: np.ndarray, joint_names: t
     return ", ".join(parts)
 
 
+def _optional_joint_signal_summary(
+    trace: dict[str, np.ndarray],
+    *,
+    trace_key: str,
+    label: str,
+    times: np.ndarray,
+    joint_names: tuple[str, ...] | None,
+) -> list[str]:
+    if trace_key not in trace:
+        return []
+
+    values = np.asarray(trace[trace_key], dtype=np.float64)
+    if values.ndim != 2 or not np.any(np.isfinite(values)):
+        return []
+
+    abs_values = np.abs(values)
+    abs_values = np.where(np.isfinite(abs_values), abs_values, np.nan)
+    max_per_frame = np.nanmax(abs_values, axis=1)
+    max_index = int(np.nanargmax(max_per_frame))
+    start_value = float(max_per_frame[0])
+    end_value = float(max_per_frame[-1])
+    max_value = float(max_per_frame[max_index])
+    lines = [
+        f"{label}_abs_max: start={start_value:.4f}, end={end_value:.4f}, "
+        f"max={max_value:.4f} at {times[max_index]:.3f}s"
+    ]
+    return lines
+
+
+def _optional_joint_signal_event_lines(
+    trace: dict[str, np.ndarray],
+    *,
+    trace_key: str,
+    event_label: str,
+    output_label: str,
+    index: int,
+    joint_names: tuple[str, ...] | None,
+) -> list[str]:
+    if trace_key not in trace:
+        return []
+
+    values = np.asarray(trace[trace_key], dtype=np.float64)
+    if values.ndim != 2 or index >= values.shape[0] or not np.any(np.isfinite(values[index])):
+        return []
+
+    finite_abs = np.where(np.isfinite(values[index]), np.abs(values[index]), -np.inf)
+    top_indices = np.argsort(finite_abs)[::-1][:5]
+    return [
+        f"{event_label} top_joint_{output_label}: "
+        + _joint_value_summary(values[index], top_indices, joint_names)
+    ]
+
+
 def _scale_param_map(
     param_map: dict[str, float],
     *,
@@ -209,6 +262,24 @@ def summarize_standing_trace(
         f"max_imbalance={np.abs(finite_left_load_share[max_left_load_imbalance_idx] - 0.5):.3f} at "
         f"{times[max_left_load_imbalance_idx]:.3f}s"
     )
+    lines.extend(
+        _optional_joint_signal_summary(
+            trace,
+            trace_key="joint_applied_torque_policy",
+            label="joint_applied_torque",
+            times=times,
+            joint_names=joint_names,
+        )
+    )
+    lines.extend(
+        _optional_joint_signal_summary(
+            trace,
+            trace_key="joint_computed_torque_policy",
+            label="joint_computed_torque",
+            times=times,
+            joint_names=joint_names,
+        )
+    )
 
     if "feet_pos_w" in trace:
         feet_pos_w = np.asarray(trace["feet_pos_w"], dtype=np.float64)
@@ -239,6 +310,26 @@ def summarize_standing_trace(
         )
         lines.append(
             f"{label} top_joint_pos_error: " + _joint_value_summary(joint_pos_error[index], top_err_idx, joint_names)
+        )
+        lines.extend(
+            _optional_joint_signal_event_lines(
+                trace,
+                trace_key="joint_applied_torque_policy",
+                event_label=label,
+                output_label="applied_torque",
+                index=index,
+                joint_names=joint_names,
+            )
+        )
+        lines.extend(
+            _optional_joint_signal_event_lines(
+                trace,
+                trace_key="joint_computed_torque_policy",
+                event_label=label,
+                output_label="computed_torque",
+                index=index,
+                joint_names=joint_names,
+            )
         )
 
     return lines
@@ -297,6 +388,21 @@ def _write_initial_root_state(env, *, root_z: float | None) -> None:
     root_state[:, 2] = float(root_z)
     root_state[:, 7:13] = 0.0
     env.robot.write_root_state_to_sim(root_state, env_ids)
+
+
+def _policy_joint_signal_or_nan(env, attr_names: tuple[str, ...]) -> np.ndarray:
+    import torch
+
+    for attr_name in attr_names:
+        values = getattr(env.robot.data, attr_name, None)
+        if values is None or not torch.is_tensor(values):
+            continue
+        try:
+            selected = values[0, env.policy_joint_ids]
+        except (IndexError, RuntimeError, TypeError):
+            continue
+        return selected.detach().cpu().numpy().astype(np.float64).copy()
+    return np.full(env.num_actions, np.nan, dtype=np.float64)
 
 
 def evaluate_standing_stability(
@@ -494,6 +600,8 @@ def main() -> None:
             "joint_pos_policy": [],
             "joint_vel_policy": [],
             "joint_pos_error_policy": [],
+            "joint_applied_torque_policy": [],
+            "joint_computed_torque_policy": [],
             "foot_normal_forces": [],
             "feet_pos_w": [],
             "termination_contact": [],
@@ -520,6 +628,8 @@ def main() -> None:
             projected_gravity = env.robot.data.projected_gravity_b[0].detach().cpu().numpy().copy()
             joint_pos = env.robot.data.joint_pos[0, env.policy_joint_ids].detach().cpu().numpy().copy()
             joint_vel = env.robot.data.joint_vel[0, env.policy_joint_ids].detach().cpu().numpy().copy()
+            joint_applied_torque = _policy_joint_signal_or_nan(env, ("applied_torque", "joint_effort"))
+            joint_computed_torque = _policy_joint_signal_or_nan(env, ("computed_torque",))
             feet_pos_w = env.robot.data.body_pos_w[0, env.feet_body_ids, :].detach().cpu().numpy().astype(np.float64).copy()
 
             trace["sim_time"].append(float(current_time))
@@ -531,6 +641,8 @@ def main() -> None:
             trace["joint_pos_policy"].append(joint_pos)
             trace["joint_vel_policy"].append(joint_vel)
             trace["joint_pos_error_policy"].append((joint_pos - standing_target).astype(np.float64))
+            trace["joint_applied_torque_policy"].append(joint_applied_torque)
+            trace["joint_computed_torque_policy"].append(joint_computed_torque)
             trace["foot_normal_forces"].append(foot_forces)
             trace["feet_pos_w"].append(feet_pos_w)
             trace["termination_contact"].append(termination_contact)
