@@ -16,24 +16,53 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @dataclass(frozen=True)
 class SweepConfig:
+    root_z: float | None
     hip_pitch_target: float
     knee_pitch_target: float
     ankle_pitch_target: float
+    hip_pitch_kp_scale: float
+    hip_pitch_kd_scale: float
+    knee_pitch_kp_scale: float
+    knee_pitch_kd_scale: float
+    ankle_pitch_kp_scale: float
+    ankle_pitch_kd_scale: float
+    ankle_roll_kp_scale: float
+    ankle_roll_kd_scale: float
 
 
 FIELD_ORDER = (
+    "root_z",
     "hip_pitch_target",
     "knee_pitch_target",
     "ankle_pitch_target",
+    "hip_pitch_kp_scale",
+    "hip_pitch_kd_scale",
+    "knee_pitch_kp_scale",
+    "knee_pitch_kd_scale",
+    "ankle_pitch_kp_scale",
+    "ankle_pitch_kd_scale",
+    "ankle_roll_kp_scale",
+    "ankle_roll_kd_scale",
 )
 FIELD_LABELS = {
+    "root_z": "rz",
     "hip_pitch_target": "hp",
     "knee_pitch_target": "kp",
     "ankle_pitch_target": "ap",
+    "hip_pitch_kp_scale": "hpkp",
+    "hip_pitch_kd_scale": "hpkd",
+    "knee_pitch_kp_scale": "kkp",
+    "knee_pitch_kd_scale": "kkd",
+    "ankle_pitch_kp_scale": "apkp",
+    "ankle_pitch_kd_scale": "apkd",
+    "ankle_roll_kp_scale": "arkp",
+    "ankle_roll_kd_scale": "arkd",
 }
 
 
-def _format_float_tag(value: float) -> str:
+def _format_float_tag(value: float | None) -> str:
+    if value is None:
+        return "default"
     text = f"{float(value):.4f}".rstrip("0").rstrip(".")
     return text.replace("-", "m").replace(".", "p")
 
@@ -68,6 +97,8 @@ def _extract_metrics(trace_path: Path, *, height_drop_threshold: float, tilt_thr
     foot_normal_forces = np.asarray(trace["foot_normal_forces"], dtype=np.float64)
     termination_contact = np.asarray(trace["termination_contact"], dtype=bool)
     feet_pos_w = np.asarray(trace["feet_pos_w"], dtype=np.float64) if "feet_pos_w" in trace else None
+    termination_force = np.asarray(trace["termination_force"], dtype=np.float64) if "termination_force" in trace else None
+    termination_body = np.asarray(trace["termination_body"]) if "termination_body" in trace else None
 
     root_z = root_pos[:, 2]
     tilt_deg = _tilt_deg_from_projected_gravity(projected_gravity)
@@ -88,6 +119,8 @@ def _extract_metrics(trace_path: Path, *, height_drop_threshold: float, tilt_thr
         "tilt_20_time": None if tilt_20_idx is None else float(times[tilt_20_idx]),
         "tilt_45_time": None if tilt_45_idx is None else float(times[tilt_45_idx]),
         "termination_contact_time": None if termination_idx is None else float(times[termination_idx]),
+        "termination_force": None if termination_idx is None or termination_force is None else float(termination_force[termination_idx]),
+        "termination_body": None if termination_idx is None or termination_body is None else str(termination_body[termination_idx]),
         "foot_force_total_start": float(total_foot_force[0]),
         "foot_force_total_end": float(total_foot_force[-1]),
         "foot_force_total_min": float(np.min(total_foot_force)),
@@ -138,9 +171,19 @@ def main() -> None:
     parser.add_argument("--settle-time", type=float, default=0.6)
     parser.add_argument("--height-drop-threshold", type=float, default=0.05)
     parser.add_argument("--tilt-threshold-deg", type=float, default=20.0)
+    parser.add_argument("--root-zs", nargs="+", type=float, default=None)
     parser.add_argument("--hip-pitch-targets", nargs="+", type=float, default=[-0.5])
     parser.add_argument("--knee-pitch-targets", nargs="+", type=float, default=[1.0])
     parser.add_argument("--ankle-pitch-targets", nargs="+", type=float, default=[-0.5])
+    parser.add_argument("--hip-pitch-kp-scales", nargs="+", type=float, default=[1.0])
+    parser.add_argument("--hip-pitch-kd-scales", nargs="+", type=float, default=[1.0])
+    parser.add_argument("--knee-pitch-kp-scales", nargs="+", type=float, default=[1.0])
+    parser.add_argument("--knee-pitch-kd-scales", nargs="+", type=float, default=[1.0])
+    parser.add_argument("--ankle-pitch-kp-scales", nargs="+", type=float, default=[1.0])
+    parser.add_argument("--ankle-pitch-kd-scales", nargs="+", type=float, default=[1.0])
+    parser.add_argument("--ankle-roll-kp-scales", nargs="+", type=float, default=[1.0])
+    parser.add_argument("--ankle-roll-kd-scales", nargs="+", type=float, default=[1.0])
+    parser.add_argument("--continue-after-termination", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -148,9 +191,18 @@ def main() -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
 
     field_values = {
+        "root_z": [None] if args.root_zs is None else args.root_zs,
         "hip_pitch_target": args.hip_pitch_targets,
         "knee_pitch_target": args.knee_pitch_targets,
         "ankle_pitch_target": args.ankle_pitch_targets,
+        "hip_pitch_kp_scale": args.hip_pitch_kp_scales,
+        "hip_pitch_kd_scale": args.hip_pitch_kd_scales,
+        "knee_pitch_kp_scale": args.knee_pitch_kp_scales,
+        "knee_pitch_kd_scale": args.knee_pitch_kd_scales,
+        "ankle_pitch_kp_scale": args.ankle_pitch_kp_scales,
+        "ankle_pitch_kd_scale": args.ankle_pitch_kd_scales,
+        "ankle_roll_kp_scale": args.ankle_roll_kp_scales,
+        "ankle_roll_kd_scale": args.ankle_roll_kd_scales,
     }
     varying_fields = tuple(field for field in FIELD_ORDER if len(field_values[field]) > 1)
     combos = [SweepConfig(*values) for values in itertools.product(*(field_values[field] for field in FIELD_ORDER))]
@@ -174,13 +226,37 @@ def main() -> None:
             f"{args.settle_time:g}",
             "--trace_out",
             str(trace_path),
+        ]
+        if config.root_z is not None:
+            command.extend(["--root_z", f"{config.root_z:g}"])
+        command.extend(
+            [
             "--hip_pitch_target",
             f"{config.hip_pitch_target:g}",
             "--knee_pitch_target",
             f"{config.knee_pitch_target:g}",
             "--ankle_pitch_target",
             f"{config.ankle_pitch_target:g}",
-        ]
+            "--hip_pitch_kp_scale",
+            f"{config.hip_pitch_kp_scale:g}",
+            "--hip_pitch_kd_scale",
+            f"{config.hip_pitch_kd_scale:g}",
+            "--knee_pitch_kp_scale",
+            f"{config.knee_pitch_kp_scale:g}",
+            "--knee_pitch_kd_scale",
+            f"{config.knee_pitch_kd_scale:g}",
+            "--ankle_pitch_kp_scale",
+            f"{config.ankle_pitch_kp_scale:g}",
+            "--ankle_pitch_kd_scale",
+            f"{config.ankle_pitch_kd_scale:g}",
+            "--ankle_roll_kp_scale",
+            f"{config.ankle_roll_kp_scale:g}",
+            "--ankle_roll_kd_scale",
+            f"{config.ankle_roll_kd_scale:g}",
+            ]
+        )
+        if args.continue_after_termination:
+            command.append("--continue_after_termination")
 
         print(f"[INFO] [{index}/{len(combos)}] {tag}")
         print(f"[INFO] Command: {' '.join(command)}")
@@ -223,6 +299,8 @@ def main() -> None:
         "tag",
         *FIELD_ORDER,
         "termination_contact_time",
+        "termination_force",
+        "termination_body",
         "root_drop_time",
         "tilt_20_time",
         "tilt_45_time",

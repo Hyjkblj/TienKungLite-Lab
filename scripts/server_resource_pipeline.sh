@@ -28,12 +28,43 @@ ISAAC_STABILITY_ARGS=()
 if [[ "${REQUIRE_STABLE}" == "1" ]]; then
   ISAAC_STABILITY_ARGS+=(--require_stable)
 fi
+ISAAC_DIAGNOSTIC_ARGS=()
+append_optional_arg() {
+  local env_name="$1"
+  local cli_name="$2"
+  local env_value="${!env_name-}"
+  if [[ -n "${env_value}" ]]; then
+    ISAAC_DIAGNOSTIC_ARGS+=("${cli_name}" "${env_value}")
+  fi
+}
+append_optional_arg ISAAC_ROOT_Z --root_z
+append_optional_arg ISAAC_SETTLE_TIME --settle_time
+append_optional_arg ISAAC_HIP_PITCH_TARGET --hip_pitch_target
+append_optional_arg ISAAC_KNEE_PITCH_TARGET --knee_pitch_target
+append_optional_arg ISAAC_ANKLE_PITCH_TARGET --ankle_pitch_target
+append_optional_arg ISAAC_HIP_PITCH_KP_SCALE --hip_pitch_kp_scale
+append_optional_arg ISAAC_HIP_PITCH_KD_SCALE --hip_pitch_kd_scale
+append_optional_arg ISAAC_KNEE_PITCH_KP_SCALE --knee_pitch_kp_scale
+append_optional_arg ISAAC_KNEE_PITCH_KD_SCALE --knee_pitch_kd_scale
+append_optional_arg ISAAC_ANKLE_PITCH_KP_SCALE --ankle_pitch_kp_scale
+append_optional_arg ISAAC_ANKLE_PITCH_KD_SCALE --ankle_pitch_kd_scale
+append_optional_arg ISAAC_ANKLE_ROLL_KP_SCALE --ankle_roll_kp_scale
+append_optional_arg ISAAC_ANKLE_ROLL_KD_SCALE --ankle_roll_kd_scale
+if [[ "${ISAAC_CONTINUE_AFTER_TERMINATION:-0}" == "1" ]]; then
+  ISAAC_DIAGNOSTIC_ARGS+=(--continue_after_termination)
+fi
+if [[ "${#ISAAC_DIAGNOSTIC_ARGS[@]}" -gt 0 ]]; then
+  printf '[INFO] Isaac diagnostic extra args:'
+  printf ' %q' "${ISAAC_DIAGNOSTIC_ARGS[@]}"
+  printf '\n'
+fi
 
 python tools/isaac_standing_diagnostic.py \
   --task "${TASK}" \
   --headless \
   --duration "${ISAAC_HOLD_DURATION}" \
   --trace_out "logs/standing/isaac_freebase_baseline.npz" \
+  "${ISAAC_DIAGNOSTIC_ARGS[@]}" \
   "${ISAAC_STABILITY_ARGS[@]}"
 
 if [[ "${RUN_MUJOCO_HOLD}" == "1" ]]; then

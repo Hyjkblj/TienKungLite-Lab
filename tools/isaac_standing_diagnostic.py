@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import traceback
 from pathlib import Path
@@ -68,6 +69,70 @@ def _resolve_physics_usd_path(usd_path: Path) -> Path:
     return next((candidate for candidate in candidates if candidate.is_file()), candidates[0])
 
 
+def _joint_value_summary(values: np.ndarray, indices: np.ndarray, joint_names: tuple[str, ...] | None) -> str:
+    parts = []
+    for index in indices:
+        label = f"j{int(index)}" if joint_names is None else joint_names[int(index)]
+        parts.append(f"{label}={values[int(index)]:+.4f}")
+    return ", ".join(parts)
+
+
+def _scale_param_map(
+    param_map: dict[str, float],
+    *,
+    pattern_scales: dict[str, float],
+) -> dict[str, float]:
+    updated: dict[str, float] = {}
+    for joint_pattern, value in param_map.items():
+        scale = 1.0
+        for scale_pattern, candidate_scale in pattern_scales.items():
+            if re.search(scale_pattern, joint_pattern):
+                scale *= float(candidate_scale)
+        updated[joint_pattern] = float(value) * scale
+    return updated
+
+
+def apply_isaac_actuator_scales(
+    robot_cfg,
+    *,
+    hip_pitch_kp_scale: float = 1.0,
+    hip_pitch_kd_scale: float = 1.0,
+    knee_pitch_kp_scale: float = 1.0,
+    knee_pitch_kd_scale: float = 1.0,
+    ankle_pitch_kp_scale: float = 1.0,
+    ankle_pitch_kd_scale: float = 1.0,
+    ankle_roll_kp_scale: float = 1.0,
+    ankle_roll_kd_scale: float = 1.0,
+) -> dict[str, dict[str, float]]:
+    stiffness_scales = {
+        "hip_pitch": hip_pitch_kp_scale,
+        "knee_pitch": knee_pitch_kp_scale,
+        "ankle_pitch": ankle_pitch_kp_scale,
+        "ankle_roll": ankle_roll_kp_scale,
+    }
+    damping_scales = {
+        "hip_pitch": hip_pitch_kd_scale,
+        "knee_pitch": knee_pitch_kd_scale,
+        "ankle_pitch": ankle_pitch_kd_scale,
+        "ankle_roll": ankle_roll_kd_scale,
+    }
+
+    effective: dict[str, dict[str, float]] = {"stiffness": {}, "damping": {}}
+    for actuator_cfg in robot_cfg.actuators.values():
+        stiffness = getattr(actuator_cfg, "stiffness", None)
+        if isinstance(stiffness, dict):
+            updated_stiffness = _scale_param_map(stiffness, pattern_scales=stiffness_scales)
+            actuator_cfg.stiffness = updated_stiffness
+            effective["stiffness"].update(updated_stiffness)
+
+        damping = getattr(actuator_cfg, "damping", None)
+        if isinstance(damping, dict):
+            updated_damping = _scale_param_map(damping, pattern_scales=damping_scales)
+            actuator_cfg.damping = updated_damping
+            effective["damping"].update(updated_damping)
+    return effective
+
+
 def summarize_standing_trace(
     trace: dict[str, np.ndarray],
     *,
@@ -75,6 +140,7 @@ def summarize_standing_trace(
     tilt_threshold_deg: float,
     support_force_threshold: float,
     support_hold_steps: int,
+    joint_names: tuple[str, ...] | None = None,
 ) -> list[str]:
     required = (
         "sim_time",
@@ -169,15 +235,68 @@ def summarize_standing_trace(
         top_vel_idx = np.argsort(np.abs(joint_vel[index]))[::-1][:5]
         top_err_idx = np.argsort(np.abs(joint_pos_error[index]))[::-1][:5]
         lines.append(
-            f"{label} top_joint_vel: "
-            + ", ".join(f"j{int(i)}={joint_vel[index, i]:+.4f}" for i in top_vel_idx)
+            f"{label} top_joint_vel: " + _joint_value_summary(joint_vel[index], top_vel_idx, joint_names)
         )
         lines.append(
-            f"{label} top_joint_pos_error: "
-            + ", ".join(f"j{int(i)}={joint_pos_error[index, i]:+.4f}" for i in top_err_idx)
+            f"{label} top_joint_pos_error: " + _joint_value_summary(joint_pos_error[index], top_err_idx, joint_names)
         )
 
     return lines
+
+
+def _max_contact_force_by_body(env, body_ids) -> tuple[float, str, np.ndarray]:
+    import torch
+
+    forces = env.contact_sensor.data.net_forces_w_history[:, :, body_ids, :3]
+    force_norms = torch.norm(forces, dim=-1)
+    max_per_body = torch.max(force_norms[0], dim=0)[0]
+    max_index = int(torch.argmax(max_per_body).item())
+    max_force = float(max_per_body[max_index].item())
+    body_id = int(body_ids[max_index])
+    body_names = getattr(env.robot, "body_names", [])
+    body_name = body_names[body_id] if body_id < len(body_names) else f"body_{body_id}"
+    return max_force, body_name, max_per_body.detach().cpu().numpy().astype(np.float64).copy()
+
+
+def _compute_termination_contact(env) -> tuple[bool, float, str, np.ndarray]:
+    max_force, body_name, max_per_body = _max_contact_force_by_body(env, env.termination_contact_cfg.body_ids)
+    return max_force > 1.0, max_force, body_name, max_per_body
+
+
+def _step_pd_hold_without_env_reset(env, joint_position_targets, *, headless: bool) -> tuple[np.ndarray, bool, float, str, np.ndarray]:
+    import torch
+
+    foot_force_sum = torch.zeros(len(env.feet_cfg.body_ids), dtype=torch.float, device=env.device)
+    for _ in range(env.cfg.sim.decimation):
+        env.sim_step_counter += 1
+        env.robot.set_joint_position_target(joint_position_targets)
+        env.scene.write_data_to_sim()
+        env.sim.step(render=False)
+        env.scene.update(dt=env.physics_dt)
+        foot_force_sum += torch.norm(
+            env.contact_sensor.data.net_forces_w[:, env.feet_cfg.body_ids, :3],
+            dim=-1,
+        )[0]
+
+    if not headless:
+        env.sim.render()
+
+    foot_forces = (foot_force_sum / env.cfg.sim.decimation).detach().cpu().numpy().astype(np.float64).copy()
+    termination_contact, termination_force, termination_body, termination_forces_by_body = _compute_termination_contact(env)
+    return foot_forces, termination_contact, termination_force, termination_body, termination_forces_by_body
+
+
+def _write_initial_root_state(env, *, root_z: float | None) -> None:
+    if root_z is None:
+        return
+
+    import torch
+
+    env_ids = torch.arange(env.num_envs, device=env.device)
+    root_state = env.robot.data.root_state_w.clone()
+    root_state[:, 2] = float(root_z)
+    root_state[:, 7:13] = 0.0
+    env.robot.write_root_state_to_sim(root_state, env_ids)
 
 
 def evaluate_standing_stability(
@@ -248,6 +367,17 @@ def main() -> None:
     parser.add_argument("--support_force_threshold", type=float, default=20.0)
     parser.add_argument("--support_hold_steps", type=int, default=3)
     parser.add_argument(
+        "--root_z",
+        type=float,
+        default=None,
+        help="Optional absolute world root height override applied after env reset and before PD hold.",
+    )
+    parser.add_argument(
+        "--continue_after_termination",
+        action="store_true",
+        help="Keep stepping after a termination contact so the trace captures the full fall.",
+    )
+    parser.add_argument(
         "--require_stable",
         action="store_true",
         help="Exit non-zero if the hold trace drops, tilts, terminates, or loses loaded double support.",
@@ -255,6 +385,14 @@ def main() -> None:
     parser.add_argument("--hip_pitch_target", type=float, default=None)
     parser.add_argument("--knee_pitch_target", type=float, default=None)
     parser.add_argument("--ankle_pitch_target", type=float, default=None)
+    parser.add_argument("--hip_pitch_kp_scale", type=float, default=1.0)
+    parser.add_argument("--hip_pitch_kd_scale", type=float, default=1.0)
+    parser.add_argument("--knee_pitch_kp_scale", type=float, default=1.0)
+    parser.add_argument("--knee_pitch_kd_scale", type=float, default=1.0)
+    parser.add_argument("--ankle_pitch_kp_scale", type=float, default=1.0)
+    parser.add_argument("--ankle_pitch_kd_scale", type=float, default=1.0)
+    parser.add_argument("--ankle_roll_kp_scale", type=float, default=1.0)
+    parser.add_argument("--ankle_roll_kd_scale", type=float, default=1.0)
     AppLauncher.add_app_launcher_args(parser)
     args_cli = parser.parse_args()
 
@@ -293,6 +431,17 @@ def main() -> None:
     env_cfg.domain_rand.events.reset_robot_joints = None
     env_cfg.domain_rand.events.push_robot = None
     env_cfg.domain_rand.action_delay.enable = False
+    effective_actuator_params = apply_isaac_actuator_scales(
+        env_cfg.scene.robot,
+        hip_pitch_kp_scale=args_cli.hip_pitch_kp_scale,
+        hip_pitch_kd_scale=args_cli.hip_pitch_kd_scale,
+        knee_pitch_kp_scale=args_cli.knee_pitch_kp_scale,
+        knee_pitch_kd_scale=args_cli.knee_pitch_kd_scale,
+        ankle_pitch_kp_scale=args_cli.ankle_pitch_kp_scale,
+        ankle_pitch_kd_scale=args_cli.ankle_pitch_kd_scale,
+        ankle_roll_kp_scale=args_cli.ankle_roll_kp_scale,
+        ankle_roll_kd_scale=args_cli.ankle_roll_kd_scale,
+    )
 
     env_class = task_registry.get_task_class(args_cli.task)
     env = None
@@ -326,18 +475,21 @@ def main() -> None:
 
         env.robot.write_joint_position_to_sim(joint_position_targets)
         env.robot.write_joint_velocity_to_sim(joint_velocity_targets)
+        _write_initial_root_state(env, root_z=args_cli.root_z)
         env.scene.write_data_to_sim()
         env.sim.forward()
 
         settle_policy_steps = max(0, int(round(args_cli.settle_time / env.step_dt)))
-        zero_action = torch.zeros((env.num_envs, env.num_actions), dtype=torch.float32, device=env.device)
         for _ in range(settle_policy_steps):
-            env.step(zero_action)
+            _step_pd_hold_without_env_reset(env, joint_position_targets, headless=args_cli.headless)
 
         total_policy_steps = max(1, int(round(args_cli.duration / env.step_dt)))
         trace: dict[str, list[np.ndarray | float | bool]] = {
             "sim_time": [],
             "root_pos": [],
+            "root_quat_wxyz": [],
+            "root_lin_vel": [],
+            "root_ang_vel": [],
             "projected_gravity": [],
             "joint_pos_policy": [],
             "joint_vel_policy": [],
@@ -345,22 +497,36 @@ def main() -> None:
             "foot_normal_forces": [],
             "feet_pos_w": [],
             "termination_contact": [],
+            "termination_force": [],
+            "termination_body": [],
+            "termination_forces_by_body": [],
         }
 
         for step_idx in range(total_policy_steps):
-            _, _, reset_buf, _ = env.step(zero_action)
+            (
+                foot_forces,
+                termination_contact,
+                termination_force,
+                termination_body,
+                termination_forces_by_body,
+            ) = _step_pd_hold_without_env_reset(env, joint_position_targets, headless=args_cli.headless)
 
             current_time = (step_idx + 1) * env.step_dt
-            root_pos = env.robot.data.root_pos_w[0].detach().cpu().numpy().copy()
+            root_state_w = env.robot.data.root_state_w[0].detach().cpu().numpy().copy()
+            root_pos = root_state_w[0:3]
+            root_quat = root_state_w[3:7]
+            root_lin_vel = root_state_w[7:10]
+            root_ang_vel = root_state_w[10:13]
             projected_gravity = env.robot.data.projected_gravity_b[0].detach().cpu().numpy().copy()
             joint_pos = env.robot.data.joint_pos[0, env.policy_joint_ids].detach().cpu().numpy().copy()
             joint_vel = env.robot.data.joint_vel[0, env.policy_joint_ids].detach().cpu().numpy().copy()
-            foot_forces = env.avg_feet_force_per_step[0].detach().cpu().numpy().astype(np.float64).copy()
             feet_pos_w = env.robot.data.body_pos_w[0, env.feet_body_ids, :].detach().cpu().numpy().astype(np.float64).copy()
-            termination_contact = bool(reset_buf[0].item())
 
             trace["sim_time"].append(float(current_time))
             trace["root_pos"].append(root_pos)
+            trace["root_quat_wxyz"].append(root_quat)
+            trace["root_lin_vel"].append(root_lin_vel)
+            trace["root_ang_vel"].append(root_ang_vel)
             trace["projected_gravity"].append(projected_gravity)
             trace["joint_pos_policy"].append(joint_pos)
             trace["joint_vel_policy"].append(joint_vel)
@@ -368,8 +534,11 @@ def main() -> None:
             trace["foot_normal_forces"].append(foot_forces)
             trace["feet_pos_w"].append(feet_pos_w)
             trace["termination_contact"].append(termination_contact)
+            trace["termination_force"].append(float(termination_force))
+            trace["termination_body"].append(termination_body)
+            trace["termination_forces_by_body"].append(termination_forces_by_body)
 
-            if termination_contact:
+            if termination_contact and not args_cli.continue_after_termination:
                 break
 
         stacked_trace = {
@@ -388,6 +557,21 @@ def main() -> None:
             f"knee_pitch={args_cli.knee_pitch_target if args_cli.knee_pitch_target is not None else 'default'}, "
             f"ankle_pitch={args_cli.ankle_pitch_target if args_cli.ankle_pitch_target is not None else 'default'}"
         )
+        print(
+            "[INFO] Diagnostic init: "
+            f"root_z={args_cli.root_z if args_cli.root_z is not None else 'asset default'}, "
+            f"settle_time={args_cli.settle_time:g}s, "
+            f"continue_after_termination={args_cli.continue_after_termination}"
+        )
+        print(
+            "[INFO] Actuator scales: "
+            f"hip_pitch(kp={args_cli.hip_pitch_kp_scale:g}, kd={args_cli.hip_pitch_kd_scale:g}), "
+            f"knee_pitch(kp={args_cli.knee_pitch_kp_scale:g}, kd={args_cli.knee_pitch_kd_scale:g}), "
+            f"ankle_pitch(kp={args_cli.ankle_pitch_kp_scale:g}, kd={args_cli.ankle_pitch_kd_scale:g}), "
+            f"ankle_roll(kp={args_cli.ankle_roll_kp_scale:g}, kd={args_cli.ankle_roll_kd_scale:g})"
+        )
+        print(f"[INFO] Effective stiffness: {effective_actuator_params['stiffness']}")
+        print(f"[INFO] Effective damping: {effective_actuator_params['damping']}")
         if fixed_root_markers["physics_usd_exists"]:
             print(
                 "[INFO] Physics USD markers: "
@@ -406,8 +590,17 @@ def main() -> None:
             tilt_threshold_deg=args_cli.tilt_threshold_deg,
             support_force_threshold=args_cli.support_force_threshold,
             support_hold_steps=args_cli.support_hold_steps,
+            joint_names=POLICY_JOINT_NAMES,
         ):
             print(line)
+        termination_indices = np.flatnonzero(np.asarray(stacked_trace["termination_contact"], dtype=bool))
+        if termination_indices.size:
+            termination_index = int(termination_indices[0])
+            print(
+                "[INFO] First termination body: "
+                f"{stacked_trace['termination_body'][termination_index]} "
+                f"force={float(stacked_trace['termination_force'][termination_index]):.3f}N"
+            )
         stability_failures = evaluate_standing_stability(
             stacked_trace,
             height_drop_threshold=args_cli.height_drop_threshold,
