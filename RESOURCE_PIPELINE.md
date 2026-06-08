@@ -176,6 +176,25 @@ REQUIRE_STABLE=0 \
 bash scripts/server_resource_pipeline.sh
 ```
 
+If this run still falls forward, pull the latest diagnostic code and rerun once more before changing pose/PD. The newer trace prints both pelvis/root and whole-body COM relative to the foot center, which separates a true COM support-polygon failure from a root-origin geometry offset:
+
+```bash
+cd /ai/users/huangwy/exp2/TienKungLite-Lab
+git pull --ff-only origin main
+USE_REFERENCE_FEET_COLLISIONS=1 \
+ISAAC_HOLD_DURATION=8 \
+ISAAC_SETTLE_TIME=0 \
+ISAAC_ROOT_Z=0.785 \
+ISAAC_HIP_PITCH_TARGET=-0.50 \
+ISAAC_KNEE_PITCH_TARGET=0.90 \
+ISAAC_ANKLE_PITCH_TARGET=-0.50 \
+ISAAC_ANKLE_PITCH_KD_SCALE=2.0 \
+REQUIRE_STABLE=0 \
+bash scripts/server_resource_pipeline.sh
+```
+
+In the output, compare `root_xy_minus_feet_center_xy` with `com_xy_minus_feet_center_xy` at `tilt_event` and `drop_event`.
+
 Only after Isaac free-base hold is stable should MuJoCo hold be used as a sim2sim check:
 
 ```bash

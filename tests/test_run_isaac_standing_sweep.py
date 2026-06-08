@@ -57,6 +57,14 @@ class RunIsaacStandingSweepTests(unittest.TestCase):
                 root_pos=np.array([[0.0, 0.0, 0.8], [0.0, 0.0, 0.7]], dtype=np.float64),
                 projected_gravity=np.array([[0.0, 0.0, -1.0], [0.8, 0.0, -0.2]], dtype=np.float64),
                 foot_normal_forces=np.array([[100.0, 100.0], [50.0, 60.0]], dtype=np.float64),
+                feet_pos_w=np.array(
+                    [
+                        [[0.0, -0.1, 0.05], [0.0, 0.1, 0.05]],
+                        [[0.1, -0.1, 0.05], [0.1, 0.1, 0.05]],
+                    ],
+                    dtype=np.float64,
+                ),
+                system_com_pos_w=np.array([[0.02, 0.0, 0.6], [0.18, 0.04, 0.5]], dtype=np.float64),
                 termination_contact=np.array([False, True], dtype=bool),
                 joint_applied_torque_policy=np.array([[1.0, -2.0], [3.0, -60.0]], dtype=np.float64),
                 joint_computed_torque_policy=np.array([[1.0, -2.0], [3.0, -75.0]], dtype=np.float64),
@@ -68,6 +76,9 @@ class RunIsaacStandingSweepTests(unittest.TestCase):
         self.assertEqual(metrics["applied_torque_abs_max_time"], 0.5)
         self.assertEqual(metrics["applied_torque_abs_max_joint"], "hip_pitch_l_joint")
         self.assertEqual(metrics["computed_torque_abs_max"], 75.0)
+        self.assertAlmostEqual(metrics["com_x_minus_feet_center_start"], 0.02)
+        self.assertAlmostEqual(metrics["com_x_minus_feet_center_end"], 0.08)
+        self.assertAlmostEqual(metrics["com_y_minus_feet_center_end"], 0.04)
 
 
 if __name__ == "__main__":

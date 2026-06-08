@@ -53,6 +53,10 @@ def _format_xy(values: np.ndarray) -> str:
     return f"({float(values[0]):+.4f}, {float(values[1]):+.4f})"
 
 
+def _format_xyz(values: np.ndarray) -> str:
+    return f"({float(values[0]):+.4f}, {float(values[1]):+.4f}, {float(values[2]):+.4f})"
+
+
 def _detect_fixed_root_markers(physics_usd_path: Path) -> dict[str, bool]:
     if not physics_usd_path.is_file():
         return {"physics_usd_exists": False, "has_root_joint": False, "has_fixed_token": False}
@@ -303,6 +307,24 @@ def summarize_standing_trace(
             f"max_norm={root_to_feet_center_norm[max_root_to_feet_center_idx]:.4f}m at "
             f"{times[max_root_to_feet_center_idx]:.3f}s"
         )
+        if "system_com_pos_w" in trace:
+            system_com_pos = np.asarray(trace["system_com_pos_w"], dtype=np.float64)
+            finite_com = np.all(np.isfinite(system_com_pos), axis=1)
+            if np.any(finite_com):
+                com_to_feet_center_xy = system_com_pos[:, :2] - feet_center_xy
+                com_to_feet_center_norm = np.linalg.norm(com_to_feet_center_xy, axis=1)
+                finite_norm = np.where(finite_com, com_to_feet_center_norm, -np.inf)
+                max_com_to_feet_center_idx = int(np.argmax(finite_norm))
+                lines.append(
+                    f"system_com_pos_w: start={_format_xyz(system_com_pos[0])}, "
+                    f"end={_format_xyz(system_com_pos[-1])}"
+                )
+                lines.append(
+                    f"com_xy_minus_feet_center_xy: start={_format_xy(com_to_feet_center_xy[0])}, "
+                    f"end={_format_xy(com_to_feet_center_xy[-1])}, "
+                    f"max_norm={com_to_feet_center_norm[max_com_to_feet_center_idx]:.4f}m at "
+                    f"{times[max_com_to_feet_center_idx]:.3f}s"
+                )
 
     for label, index in (
         ("termination_contact", termination_contact_idx),
@@ -322,6 +344,11 @@ def summarize_standing_trace(
             feet_center_xy = np.mean(feet_pos_w[index, :, :2], axis=0)
             root_to_feet_center_xy = root_pos[index, :2] - feet_center_xy
             lines.append(f"{label} root_xy_minus_feet_center_xy: {_format_xy(root_to_feet_center_xy)}")
+            if "system_com_pos_w" in trace:
+                system_com_pos = np.asarray(trace["system_com_pos_w"], dtype=np.float64)
+                if index < system_com_pos.shape[0] and np.all(np.isfinite(system_com_pos[index])):
+                    com_to_feet_center_xy = system_com_pos[index, :2] - feet_center_xy
+                    lines.append(f"{label} com_xy_minus_feet_center_xy: {_format_xy(com_to_feet_center_xy)}")
         top_vel_idx = np.argsort(np.abs(joint_vel[index]))[::-1][:5]
         top_err_idx = np.argsort(np.abs(joint_pos_error[index]))[::-1][:5]
         lines.append(
@@ -371,6 +398,39 @@ def _max_contact_force_by_body(env, body_ids) -> tuple[float, str, np.ndarray]:
 def _compute_termination_contact(env) -> tuple[bool, float, str, np.ndarray]:
     max_force, body_name, max_per_body = _max_contact_force_by_body(env, env.termination_contact_cfg.body_ids)
     return max_force > 1.0, max_force, body_name, max_per_body
+
+
+def _first_env_tensor_value(env, attr_names: tuple[str, ...]) -> np.ndarray | None:
+    import torch
+
+    for attr_name in attr_names:
+        values = getattr(env.robot.data, attr_name, None)
+        if values is None or not torch.is_tensor(values) or values.ndim < 2:
+            continue
+        return values[0].detach().cpu().numpy().astype(np.float64).copy()
+    return None
+
+
+def _system_com_pos_or_nan(env) -> np.ndarray:
+    body_com = _first_env_tensor_value(env, ("body_com_pos_w", "body_com_pose_w", "body_pos_w", "body_state_w"))
+    body_mass = _first_env_tensor_value(env, ("body_mass", "default_mass", "body_masses", "default_body_mass"))
+    if body_com is None or body_mass is None:
+        return np.full(3, np.nan, dtype=np.float64)
+
+    body_com_pos = body_com[:, :3]
+    body_mass = np.asarray(body_mass, dtype=np.float64).reshape(-1)
+    if body_com_pos.shape[0] != body_mass.shape[0]:
+        return np.full(3, np.nan, dtype=np.float64)
+
+    valid = np.isfinite(body_mass) & (body_mass > 0.0) & np.all(np.isfinite(body_com_pos), axis=1)
+    if not np.any(valid):
+        return np.full(3, np.nan, dtype=np.float64)
+
+    valid_mass = body_mass[valid]
+    total_mass = float(np.sum(valid_mass))
+    if total_mass <= 0.0:
+        return np.full(3, np.nan, dtype=np.float64)
+    return np.sum(body_com_pos[valid] * valid_mass[:, None], axis=0) / total_mass
 
 
 def _step_pd_hold_without_env_reset(env, joint_position_targets, *, headless: bool) -> tuple[np.ndarray, bool, float, str, np.ndarray]:
@@ -615,6 +675,7 @@ def main() -> None:
             "root_quat_wxyz": [],
             "root_lin_vel": [],
             "root_ang_vel": [],
+            "system_com_pos_w": [],
             "projected_gravity": [],
             "joint_pos_policy": [],
             "joint_vel_policy": [],
@@ -644,6 +705,7 @@ def main() -> None:
             root_quat = root_state_w[3:7]
             root_lin_vel = root_state_w[7:10]
             root_ang_vel = root_state_w[10:13]
+            system_com_pos = _system_com_pos_or_nan(env)
             projected_gravity = env.robot.data.projected_gravity_b[0].detach().cpu().numpy().copy()
             joint_pos = env.robot.data.joint_pos[0, env.policy_joint_ids].detach().cpu().numpy().copy()
             joint_vel = env.robot.data.joint_vel[0, env.policy_joint_ids].detach().cpu().numpy().copy()
@@ -656,6 +718,7 @@ def main() -> None:
             trace["root_quat_wxyz"].append(root_quat)
             trace["root_lin_vel"].append(root_lin_vel)
             trace["root_ang_vel"].append(root_ang_vel)
+            trace["system_com_pos_w"].append(system_com_pos)
             trace["projected_gravity"].append(projected_gravity)
             trace["joint_pos_policy"].append(joint_pos)
             trace["joint_vel_policy"].append(joint_vel)

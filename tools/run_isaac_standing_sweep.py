@@ -136,6 +136,7 @@ def _extract_metrics(trace_path: Path, *, height_drop_threshold: float, tilt_thr
     feet_pos_w = np.asarray(trace["feet_pos_w"], dtype=np.float64) if "feet_pos_w" in trace else None
     termination_force = np.asarray(trace["termination_force"], dtype=np.float64) if "termination_force" in trace else None
     termination_body = np.asarray(trace["termination_body"]) if "termination_body" in trace else None
+    system_com_pos_w = np.asarray(trace["system_com_pos_w"], dtype=np.float64) if "system_com_pos_w" in trace else None
 
     root_z = root_pos[:, 2]
     tilt_deg = _tilt_deg_from_projected_gravity(projected_gravity)
@@ -183,6 +184,20 @@ def _extract_metrics(trace_path: Path, *, height_drop_threshold: float, tilt_thr
         metrics["feet_z_start"] = foot_z[0].astype(np.float64).tolist()
         metrics["feet_z_end"] = foot_z[-1].astype(np.float64).tolist()
         metrics["feet_z_min"] = np.min(foot_z, axis=0).astype(np.float64).tolist()
+        if system_com_pos_w is not None:
+            finite_com = np.all(np.isfinite(system_com_pos_w), axis=1)
+            if np.any(finite_com):
+                feet_center_xy = np.mean(feet_pos_w[:, :, :2], axis=1)
+                com_xy_minus_feet_center_xy = system_com_pos_w[:, :2] - feet_center_xy
+                com_xy_minus_feet_center_norm = np.linalg.norm(com_xy_minus_feet_center_xy, axis=1)
+                finite_norm = np.where(finite_com, com_xy_minus_feet_center_norm, -np.inf)
+                max_idx = int(np.argmax(finite_norm))
+                metrics["com_x_minus_feet_center_start"] = float(com_xy_minus_feet_center_xy[0, 0])
+                metrics["com_x_minus_feet_center_end"] = float(com_xy_minus_feet_center_xy[-1, 0])
+                metrics["com_y_minus_feet_center_start"] = float(com_xy_minus_feet_center_xy[0, 1])
+                metrics["com_y_minus_feet_center_end"] = float(com_xy_minus_feet_center_xy[-1, 1])
+                metrics["com_xy_minus_feet_center_norm_max"] = float(com_xy_minus_feet_center_norm[max_idx])
+                metrics["com_xy_minus_feet_center_norm_max_time"] = float(times[max_idx])
     return metrics
 
 
@@ -372,6 +387,12 @@ def main() -> None:
         "feet_z_start",
         "feet_z_end",
         "feet_z_min",
+        "com_x_minus_feet_center_start",
+        "com_x_minus_feet_center_end",
+        "com_y_minus_feet_center_start",
+        "com_y_minus_feet_center_end",
+        "com_xy_minus_feet_center_norm_max",
+        "com_xy_minus_feet_center_norm_max_time",
         "duration",
         "trace_path",
         "log_path",

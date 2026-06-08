@@ -198,6 +198,40 @@ class IsaacStandingDiagnosticTests(unittest.TestCase):
         self.assertIn("root_xy_minus_feet_center_xy: start=(+0.1000, +0.0000)", joined)
         self.assertIn("termination_contact root_xy_minus_feet_center_xy: (+0.1000, +0.1000)", joined)
 
+    def test_summarize_standing_trace_reports_system_com_relative_to_feet(self) -> None:
+        module = load_module()
+        trace = {
+            "sim_time": np.array([0.0, 0.5], dtype=np.float64),
+            "root_pos": np.array([[0.1, 0.0, 1.0], [0.2, 0.1, 0.9]], dtype=np.float64),
+            "projected_gravity": np.array([[0.0, 0.0, -1.0], [0.8, 0.0, -0.2]], dtype=np.float64),
+            "joint_vel_policy": np.zeros((2, 2), dtype=np.float64),
+            "joint_pos_error_policy": np.zeros((2, 2), dtype=np.float64),
+            "foot_normal_forces": np.array([[100.0, 100.0], [0.0, 0.0]], dtype=np.float64),
+            "feet_pos_w": np.array(
+                [
+                    [[0.0, -0.1, 0.05], [0.0, 0.1, 0.05]],
+                    [[0.1, -0.1, 0.05], [0.1, 0.1, 0.05]],
+                ],
+                dtype=np.float64,
+            ),
+            "system_com_pos_w": np.array([[0.02, 0.0, 0.6], [0.18, 0.04, 0.5]], dtype=np.float64),
+            "termination_contact": np.array([False, True], dtype=bool),
+        }
+
+        lines = module.summarize_standing_trace(
+            trace,
+            height_drop_threshold=0.05,
+            tilt_threshold_deg=20.0,
+            support_force_threshold=20.0,
+            support_hold_steps=1,
+            joint_names=("hip_pitch_l_joint", "ankle_pitch_l_joint"),
+        )
+
+        joined = "\n".join(lines)
+        self.assertIn("system_com_pos_w: start=(+0.0200, +0.0000, +0.6000)", joined)
+        self.assertIn("com_xy_minus_feet_center_xy: start=(+0.0200, +0.0000)", joined)
+        self.assertIn("termination_contact com_xy_minus_feet_center_xy: (+0.0800, +0.0400)", joined)
+
     def test_apply_isaac_actuator_scales_updates_stiffness_and_damping(self) -> None:
         module = load_module()
         robot_cfg = SimpleNamespace(
