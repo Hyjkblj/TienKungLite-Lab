@@ -49,6 +49,10 @@ def _format_event(label: str, index: int | None, times: np.ndarray) -> str:
     return f"{label}: step={index}, time={times[index]:.3f}s"
 
 
+def _format_xy(values: np.ndarray) -> str:
+    return f"({float(values[0]):+.4f}, {float(values[1]):+.4f})"
+
+
 def _detect_fixed_root_markers(physics_usd_path: Path) -> dict[str, bool]:
     if not physics_usd_path.is_file():
         return {"physics_usd_exists": False, "has_root_joint": False, "has_fixed_token": False}
@@ -289,6 +293,16 @@ def summarize_standing_trace(
             f"end=({foot_z[-1, 0]:.4f}, {foot_z[-1, 1]:.4f}), "
             f"min=({np.min(foot_z[:, 0]):.4f}, {np.min(foot_z[:, 1]):.4f})"
         )
+        feet_center_xy = np.mean(feet_pos_w[:, :, :2], axis=1)
+        root_to_feet_center_xy = root_pos[:, :2] - feet_center_xy
+        root_to_feet_center_norm = np.linalg.norm(root_to_feet_center_xy, axis=1)
+        max_root_to_feet_center_idx = int(np.argmax(root_to_feet_center_norm))
+        lines.append(
+            f"root_xy_minus_feet_center_xy: start={_format_xy(root_to_feet_center_xy[0])}, "
+            f"end={_format_xy(root_to_feet_center_xy[-1])}, "
+            f"max_norm={root_to_feet_center_norm[max_root_to_feet_center_idx]:.4f}m at "
+            f"{times[max_root_to_feet_center_idx]:.3f}s"
+        )
 
     for label, index in (
         ("termination_contact", termination_contact_idx),
@@ -303,6 +317,11 @@ def summarize_standing_trace(
             f"{label}@{times[index]:.3f}s: root_z={root_z[index]:.4f}, tilt={tilt_deg[index]:.2f}deg, "
             f"foot_forces=({foot_normal_forces[index, 0]:.2f}, {foot_normal_forces[index, 1]:.2f})"
         )
+        if "feet_pos_w" in trace:
+            feet_pos_w = np.asarray(trace["feet_pos_w"], dtype=np.float64)
+            feet_center_xy = np.mean(feet_pos_w[index, :, :2], axis=0)
+            root_to_feet_center_xy = root_pos[index, :2] - feet_center_xy
+            lines.append(f"{label} root_xy_minus_feet_center_xy: {_format_xy(root_to_feet_center_xy)}")
         top_vel_idx = np.argsort(np.abs(joint_vel[index]))[::-1][:5]
         top_err_idx = np.argsort(np.abs(joint_pos_error[index]))[::-1][:5]
         lines.append(
