@@ -226,6 +226,26 @@ python tools/analyze_isaac_standing_trace.py logs/standing/isaac_freebase_baseli
 
 Focus on `start_state top_joint_vel`, `start_state top_joint_pos_error`, and `start_state top_joint_applied_torque`; large initial sagittal velocities/errors mean the pose is not a static equilibrium even before the visible fall.
 
+For the current forward-fall case, run a small static-equilibrium sweep and rank rows by both hold time and the new `start_*` columns in the CSV:
+
+```bash
+cd /ai/users/huangwy/exp2/TienKungLite-Lab
+git pull --ff-only origin main
+USE_REFERENCE_FEET_COLLISIONS=1 REQUIRE_STABLE=0 ISAAC_HOLD_DURATION=1 bash scripts/server_resource_pipeline.sh
+export TIENKUNG_LITE_USD_REL_PATH=urdf/humanoid_publish_free_base/humanoid_publish_free_base.usd
+python tools/run_isaac_standing_sweep.py \
+  --run-dir logs/standing/isaac_static_equilibrium_$(date +%Y%m%d_%H%M%S) \
+  --duration 3 \
+  --settle-time 0 \
+  --root-zs 0.785 \
+  --hip-pitch-targets -0.55 -0.50 -0.45 \
+  --knee-pitch-targets 0.80 0.90 1.00 \
+  --ankle-pitch-targets -0.60 -0.55 -0.50 -0.45 \
+  --ankle-pitch-kd-scales 2.0 3.0 4.0
+```
+
+Prefer candidates that reduce `start_joint_speed_abs_max`, `start_joint_pos_error_abs_max`, and `start_applied_torque_abs_max` without making `tilt_20_time` earlier.
+
 Only after Isaac free-base hold is stable should MuJoCo hold be used as a sim2sim check:
 
 ```bash

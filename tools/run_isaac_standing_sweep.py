@@ -124,6 +124,28 @@ def _joint_signal_metrics(
     }
 
 
+def _joint_signal_start_metrics(
+    trace: dict[str, np.ndarray],
+    *,
+    trace_key: str,
+    label: str,
+) -> dict[str, object]:
+    if trace_key not in trace:
+        return {f"start_{label}_abs_max": None, f"start_{label}_abs_max_joint": None}
+
+    values = np.asarray(trace[trace_key], dtype=np.float64)
+    if values.ndim != 2 or values.shape[0] == 0 or not np.any(np.isfinite(values[0])):
+        return {f"start_{label}_abs_max": None, f"start_{label}_abs_max_joint": None}
+
+    finite_abs = np.where(np.isfinite(values[0]), np.abs(values[0]), -np.inf)
+    joint_idx = int(np.argmax(finite_abs))
+    joint_name = POLICY_JOINT_NAMES[joint_idx] if joint_idx < len(POLICY_JOINT_NAMES) else f"joint_{joint_idx}"
+    return {
+        f"start_{label}_abs_max": float(finite_abs[joint_idx]),
+        f"start_{label}_abs_max_joint": joint_name,
+    }
+
+
 def _extract_metrics(trace_path: Path, *, height_drop_threshold: float, tilt_threshold_deg: float) -> dict[str, object]:
     with np.load(trace_path) as data:
         trace = {key: data[key] for key in data.files}
@@ -163,6 +185,27 @@ def _extract_metrics(trace_path: Path, *, height_drop_threshold: float, tilt_thr
         "foot_force_total_end": float(total_foot_force[-1]),
         "foot_force_total_min": float(np.min(total_foot_force)),
     }
+    metrics.update(
+        _joint_signal_start_metrics(
+            trace,
+            trace_key="joint_vel_policy",
+            label="joint_speed",
+        )
+    )
+    metrics.update(
+        _joint_signal_start_metrics(
+            trace,
+            trace_key="joint_pos_error_policy",
+            label="joint_pos_error",
+        )
+    )
+    metrics.update(
+        _joint_signal_start_metrics(
+            trace,
+            trace_key="joint_applied_torque_policy",
+            label="applied_torque",
+        )
+    )
     metrics.update(
         _joint_signal_metrics(
             trace,
@@ -375,6 +418,12 @@ def main() -> None:
         "root_z_start",
         "root_z_end",
         "root_z_min",
+        "start_joint_speed_abs_max",
+        "start_joint_speed_abs_max_joint",
+        "start_joint_pos_error_abs_max",
+        "start_joint_pos_error_abs_max_joint",
+        "start_applied_torque_abs_max",
+        "start_applied_torque_abs_max_joint",
         "foot_force_total_start",
         "foot_force_total_end",
         "foot_force_total_min",
@@ -413,6 +462,10 @@ def main() -> None:
             f"drop={_stringify_metric(row.get('root_drop_time')) or 'not_reached'}s, "
             f"tilt20={_stringify_metric(row.get('tilt_20_time')) or 'not_reached'}s, "
             f"tilt45={_stringify_metric(row.get('tilt_45_time')) or 'not_reached'}s, "
+            f"start_speed={_stringify_metric(row.get('start_joint_speed_abs_max')) or 'n/a'}"
+            f"@{row.get('start_joint_speed_abs_max_joint') or 'n/a'}, "
+            f"start_tau={_stringify_metric(row.get('start_applied_torque_abs_max')) or 'n/a'}"
+            f"@{row.get('start_applied_torque_abs_max_joint') or 'n/a'}, "
             f"applied_tau_max={_stringify_metric(row.get('applied_torque_abs_max')) or 'n/a'}"
             f"@{row.get('applied_torque_abs_max_joint') or 'n/a'}"
         )
