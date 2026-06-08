@@ -64,7 +64,8 @@ python tools/isaac_standing_diagnostic.py \
   --task walk_real_lite \
   --headless \
   --duration 6 \
-  --trace_out logs/standing/isaac_freebase_baseline.npz
+  --trace_out logs/standing/isaac_freebase_baseline.npz \
+  --require_stable
 ```
 
 Only after Isaac free-base hold is stable should MuJoCo hold be used as a sim2sim check:
@@ -80,6 +81,8 @@ python sim2sim_real_lite.py \
   --duration 30 \
   --trace_out logs/standing/mujoco_hold_30s.npz \
   --trace_steps 1501 \
+  --save_video logs/standing/mujoco_hold_30s.mp4 \
+  --camera follow_side \
   --settle_steps 120
 ```
 

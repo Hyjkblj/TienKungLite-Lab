@@ -7,6 +7,8 @@ ISAAC_HOLD_DURATION="${ISAAC_HOLD_DURATION:-6}"
 RUN_MUJOCO_HOLD="${RUN_MUJOCO_HOLD:-0}"
 MUJOCO_HOLD_DURATION="${MUJOCO_HOLD_DURATION:-30}"
 INSTALL_SIM2SIM="${INSTALL_SIM2SIM:-0}"
+REQUIRE_STABLE="${REQUIRE_STABLE:-1}"
+MUJOCO_VIDEO_PATH="${MUJOCO_VIDEO_PATH:-logs/standing/mujoco_hold_${MUJOCO_HOLD_DURATION}s.mp4}"
 
 cd "${SERVER_REPO}"
 
@@ -22,11 +24,17 @@ echo "[INFO] auditing resource pipeline"
 python tools/audit_real_lite_resource_pipeline.py --strict
 
 echo "[INFO] running Isaac free-base standing diagnostic"
+ISAAC_STABILITY_ARGS=()
+if [[ "${REQUIRE_STABLE}" == "1" ]]; then
+  ISAAC_STABILITY_ARGS+=(--require_stable)
+fi
+
 python tools/isaac_standing_diagnostic.py \
   --task "${TASK}" \
   --headless \
   --duration "${ISAAC_HOLD_DURATION}" \
-  --trace_out "logs/standing/isaac_freebase_baseline.npz"
+  --trace_out "logs/standing/isaac_freebase_baseline.npz" \
+  "${ISAAC_STABILITY_ARGS[@]}"
 
 if [[ "${RUN_MUJOCO_HOLD}" == "1" ]]; then
   if [[ "${INSTALL_SIM2SIM}" == "1" ]]; then
@@ -44,6 +52,11 @@ if [[ "${RUN_MUJOCO_HOLD}" == "1" ]]; then
     --duration "${MUJOCO_HOLD_DURATION}" \
     --trace_out "logs/standing/mujoco_hold_${MUJOCO_HOLD_DURATION}s.npz" \
     --trace_steps "$((MUJOCO_HOLD_DURATION * 50 + 1))" \
+    --save_video "${MUJOCO_VIDEO_PATH}" \
+    --camera follow_side \
+    --fps 20 \
+    --width 960 \
+    --height 540 \
     --settle_steps 120
 fi
 

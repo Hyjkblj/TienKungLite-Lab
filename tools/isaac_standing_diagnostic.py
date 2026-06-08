@@ -60,6 +60,14 @@ def _detect_fixed_root_markers(physics_usd_path: Path) -> dict[str, bool]:
     }
 
 
+def _resolve_physics_usd_path(usd_path: Path) -> Path:
+    candidates = (
+        usd_path.parent / "configuration" / f"{usd_path.stem}_physics.usd",
+        usd_path.parent / "configuration" / "humanoid_publish_physics.usd",
+    )
+    return next((candidate for candidate in candidates if candidate.is_file()), candidates[0])
+
+
 def summarize_standing_trace(
     trace: dict[str, np.ndarray],
     *,
@@ -172,6 +180,60 @@ def summarize_standing_trace(
     return lines
 
 
+def evaluate_standing_stability(
+    trace: dict[str, np.ndarray],
+    *,
+    height_drop_threshold: float,
+    tilt_threshold_deg: float,
+    support_force_threshold: float,
+    support_hold_steps: int,
+) -> list[str]:
+    required = (
+        "sim_time",
+        "root_pos",
+        "projected_gravity",
+        "foot_normal_forces",
+        "termination_contact",
+    )
+    missing = [key for key in required if key not in trace]
+    if missing:
+        raise KeyError(f"Trace is missing required keys: {', '.join(missing)}")
+
+    times = np.asarray(trace["sim_time"], dtype=np.float64)
+    root_pos = np.asarray(trace["root_pos"], dtype=np.float64)
+    projected_gravity = np.asarray(trace["projected_gravity"], dtype=np.float64)
+    foot_normal_forces = np.asarray(trace["foot_normal_forces"], dtype=np.float64)
+    termination_contact = np.asarray(trace["termination_contact"], dtype=bool)
+
+    tilt_deg = _tilt_deg_from_projected_gravity(projected_gravity)
+    root_z = root_pos[:, 2]
+    start_root_z = float(root_z[0])
+    loaded_double_support = np.all(foot_normal_forces >= support_force_threshold, axis=1)
+
+    failures: list[str] = []
+    termination_idx = _first_index(termination_contact)
+    root_drop_idx = _first_index(root_z <= start_root_z - height_drop_threshold)
+    tilt_idx = _first_index(tilt_deg >= tilt_threshold_deg)
+    loaded_single_support_idx = _first_run_index(~loaded_double_support, support_hold_steps)
+
+    if termination_idx is not None:
+        failures.append(f"termination contact at {times[termination_idx]:.3f}s")
+    if root_drop_idx is not None:
+        failures.append(
+            f"root dropped by >= {height_drop_threshold:.3f}m at {times[root_drop_idx]:.3f}s"
+        )
+    if tilt_idx is not None:
+        failures.append(f"tilt reached >= {tilt_threshold_deg:.1f}deg at {times[tilt_idx]:.3f}s")
+    if loaded_single_support_idx is not None:
+        failures.append(
+            "loaded double support was lost "
+            f"for {support_hold_steps} frames at {times[loaded_single_support_idx]:.3f}s"
+        )
+    if float(np.max(np.sum(foot_normal_forces, axis=1))) <= 1e-6:
+        failures.append("foot normal forces stayed at 0 across the rollout")
+    return failures
+
+
 def main() -> None:
     from isaaclab.app import AppLauncher
 
@@ -185,6 +247,11 @@ def main() -> None:
     parser.add_argument("--tilt_threshold_deg", type=float, default=20.0)
     parser.add_argument("--support_force_threshold", type=float, default=20.0)
     parser.add_argument("--support_hold_steps", type=int, default=3)
+    parser.add_argument(
+        "--require_stable",
+        action="store_true",
+        help="Exit non-zero if the hold trace drops, tilts, terminates, or loses loaded double support.",
+    )
     parser.add_argument("--hip_pitch_target", type=float, default=None)
     parser.add_argument("--knee_pitch_target", type=float, default=None)
     parser.add_argument("--ankle_pitch_target", type=float, default=None)
@@ -231,7 +298,7 @@ def main() -> None:
     env = None
     try:
         env = env_class(env_cfg, args_cli.headless)
-        physics_usd_path = Path(env.robot.cfg.spawn.usd_path).resolve().parent / "configuration" / "humanoid_publish_physics.usd"
+        physics_usd_path = _resolve_physics_usd_path(Path(env.robot.cfg.spawn.usd_path).resolve())
         fixed_root_markers = _detect_fixed_root_markers(physics_usd_path)
 
         standing_target = apply_symmetric_standing_pitch_targets(
@@ -341,6 +408,18 @@ def main() -> None:
             support_hold_steps=args_cli.support_hold_steps,
         ):
             print(line)
+        stability_failures = evaluate_standing_stability(
+            stacked_trace,
+            height_drop_threshold=args_cli.height_drop_threshold,
+            tilt_threshold_deg=args_cli.tilt_threshold_deg,
+            support_force_threshold=args_cli.support_force_threshold,
+            support_hold_steps=args_cli.support_hold_steps,
+        )
+        if args_cli.require_stable and stability_failures:
+            print("[ERROR] Isaac standing stability gate failed:")
+            for failure in stability_failures:
+                print(f"[ERROR]   {failure}")
+            raise RuntimeError("Isaac standing diagnostic did not satisfy the requested stability gate.")
         if float(np.max(np.sum(stacked_trace["foot_normal_forces"], axis=1))) <= 1e-6:
             print(
                 "[WARN] Foot normal forces stayed at 0 across the rollout; "

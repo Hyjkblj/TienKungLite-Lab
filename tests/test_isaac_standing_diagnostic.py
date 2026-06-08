@@ -69,6 +69,50 @@ class IsaacStandingDiagnosticTests(unittest.TestCase):
         self.assertIn("termination contact: step=2, time=1.000s", joined)
         self.assertIn("loaded double support lost for 2 frames: not reached", joined)
 
+    def test_evaluate_standing_stability_reports_failures(self) -> None:
+        module = load_module()
+        trace = {
+            "sim_time": np.array([0.0, 0.5, 1.0], dtype=np.float64),
+            "root_pos": np.array(
+                [
+                    [0.0, 0.0, 1.0],
+                    [0.0, 0.0, 0.98],
+                    [0.0, 0.0, 0.90],
+                ],
+                dtype=np.float64,
+            ),
+            "projected_gravity": np.array(
+                [
+                    [0.0, 0.0, -1.0],
+                    [0.1, 0.0, -0.99],
+                    [0.8, 0.0, -0.2],
+                ],
+                dtype=np.float64,
+            ),
+            "foot_normal_forces": np.array(
+                [
+                    [200.0, 200.0],
+                    [150.0, 30.0],
+                    [0.0, 0.0],
+                ],
+                dtype=np.float64,
+            ),
+            "termination_contact": np.array([False, False, True], dtype=bool),
+        }
+
+        failures = module.evaluate_standing_stability(
+            trace,
+            height_drop_threshold=0.05,
+            tilt_threshold_deg=20.0,
+            support_force_threshold=20.0,
+            support_hold_steps=2,
+        )
+
+        joined = "\n".join(failures)
+        self.assertIn("termination contact", joined)
+        self.assertIn("root dropped", joined)
+        self.assertIn("tilt reached", joined)
+
 
 if __name__ == "__main__":
     unittest.main()
