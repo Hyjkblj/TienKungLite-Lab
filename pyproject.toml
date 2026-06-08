@@ -14,5 +14,11 @@ dependencies = [
     "onnx",
 ]
 
+[project.optional-dependencies]
+sim2sim = [
+    "mujoco>=3.2.0",
+    "imageio>=2.31.0",
+]
+
 [tool.setuptools.packages.find]
 include = ["real_lite_lab*"]

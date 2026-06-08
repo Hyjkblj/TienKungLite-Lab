@@ -30,7 +30,8 @@ class JointOrderTests(unittest.TestCase):
 
         self.assertEqual(indices, [0, 2, 1])
 
-    def test_mjcf_actuator_order_differs_from_policy_order(self) -> None:
+    def test_mjcf_actuator_order_maps_to_policy_order(self) -> None:
+        joint_order_module = load_module(JOINT_ORDER_MODULE_PATH, "test_joint_order_module_for_mjcf")
         constants_module = load_module(CONSTANTS_MODULE_PATH, "test_constants_module")
         mjcf_path = REPO_ROOT / "mjcf" / "real_lite.xml"
         mjcf_root = ET.parse(mjcf_path).getroot()
@@ -38,10 +39,12 @@ class JointOrderTests(unittest.TestCase):
         actuator_order = [elem.attrib["joint"] for elem in mjcf_root.findall("./actuator/position")]
         policy_order = list(constants_module.POLICY_JOINT_NAMES)
 
-        self.assertNotEqual(actuator_order, policy_order)
         self.assertEqual(set(actuator_order), set(policy_order))
-        self.assertEqual(actuator_order[:3], ["hip_roll_l_joint", "hip_yaw_l_joint", "hip_pitch_l_joint"])
-        self.assertEqual(policy_order[:3], ["hip_roll_l_joint", "hip_pitch_l_joint", "hip_yaw_l_joint"])
+
+        indices = joint_order_module.build_target_order_indices(policy_order, actuator_order)
+        reordered = [actuator_order[index] for index in indices]
+
+        self.assertEqual(reordered, policy_order)
 
 
 if __name__ == "__main__":

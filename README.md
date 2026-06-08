@@ -53,6 +53,29 @@ On Windows PowerShell:
 $env:TIENKUNG_LITE_ASSET_ROOT="D:\path\to\x_humanoid_0430_newfeet_newbody_publish"
 ```
 
+For free-base humanoid training, the Isaac asset must not be the fixed-base USD. The default runtime path now expects:
+
+```text
+urdf/humanoid_publish_free_base/humanoid_publish_free_base.usd
+```
+
+Generate it on the Isaac Lab server with:
+
+```bash
+cd /ai/users/huangwy/exp2/TienKungLite-Lab
+python tools/reexport_real_lite_usd.py --headless --force
+export TIENKUNG_LITE_USD_REL_PATH=urdf/humanoid_publish_free_base/humanoid_publish_free_base.usd
+```
+
+The server-side resource validation shortcut is:
+
+```bash
+cd /ai/users/huangwy/exp2/TienKungLite-Lab
+bash scripts/server_resource_pipeline.sh
+```
+
+If startup reports that the USD contains `root_joint` and `Fixed`, do not continue PPO or sim2sim tuning until the free-base USD is fixed.
+
 ## Repository Layout
 
 - `train_real_lite.py`
@@ -129,6 +152,12 @@ Generate the MuJoCo model first:
 python tools/generate_real_lite_mjcf.py
 ```
 
+Install optional MuJoCo dependencies when needed:
+
+```bash
+pip install -e ".[sim2sim]"
+```
+
 Then run closed-loop validation:
 
 ```bash
@@ -147,3 +176,4 @@ python sim2sim_real_lite.py --task walk_real_lite --policy <policy.pt> --save_vi
 - This repository currently covers training, export, motion visualization, and MuJoCo sim2sim validation.
 - The real-robot deployment path is intentionally kept outside this repository for now.
 - If you change the URDF, joint limits, or inertial parameters, regenerate and revalidate `mjcf/real_lite.xml`.
+- See `RESOURCE_PIPELINE.md` for the local audit and server-side free-base USD / standing validation workflow.

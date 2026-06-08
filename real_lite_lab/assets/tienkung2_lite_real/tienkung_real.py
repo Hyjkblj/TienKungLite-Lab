@@ -8,28 +8,25 @@ from isaaclab.assets.articulation import ArticulationCfg
 from ...alignment_config import SOFT_JOINT_POS_LIMIT_FACTOR
 from .. import resolve_real_lite_asset_root
 from ...constants import DEFAULT_JOINT_POS
+from ...usd_asset_validation import FREE_BASE_USD_REL_PATH, resolve_real_lite_usd_path
 
 ASSET_DIR = resolve_real_lite_asset_root()
 USD_REL_PATH_ENV_VAR = "TIENKUNG_LITE_USD_REL_PATH"
-DEFAULT_USD_REL_PATH = Path("urdf") / "humanoid_publish" / "humanoid_publish.usd"
+ALLOW_FIXED_BASE_USD_ENV_VAR = "TIENKUNG_LITE_ALLOW_FIXED_BASE_USD"
+DEFAULT_USD_REL_PATH = FREE_BASE_USD_REL_PATH
+
+
+def _env_flag_enabled(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _resolve_usd_path() -> Path:
     configured_rel_path = os.getenv(USD_REL_PATH_ENV_VAR)
-    if configured_rel_path:
-        usd_path = ASSET_DIR / Path(configured_rel_path)
-    else:
-        usd_path = ASSET_DIR / DEFAULT_USD_REL_PATH
-
-    usd_path = usd_path.resolve()
-    if not usd_path.is_file():
-        configured_hint = f"{USD_REL_PATH_ENV_VAR}={configured_rel_path}" if configured_rel_path else "default USD path"
-        raise FileNotFoundError(
-            f"Real Lite USD asset not found: {usd_path}\n"
-            f"Resolved from {configured_hint} under asset root: {ASSET_DIR}\n"
-            "Generate the USD first or point TIENKUNG_LITE_USD_REL_PATH to an existing USD file."
-        )
-    return usd_path
+    return resolve_real_lite_usd_path(
+        ASSET_DIR,
+        configured_rel_path=configured_rel_path,
+        allow_fixed_base=_env_flag_enabled(ALLOW_FIXED_BASE_USD_ENV_VAR),
+    )
 
 
 USD_PATH = _resolve_usd_path()
