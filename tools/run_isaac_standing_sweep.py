@@ -393,6 +393,7 @@ def main() -> None:
             f"tilt20={_stringify_metric(row.get('tilt_20_time')) or 'not_reached'}s, "
             f"tilt45={_stringify_metric(row.get('tilt_45_time')) or 'not_reached'}s, "
             f"applied_tau_max={_stringify_metric(row.get('applied_torque_abs_max')) or 'n/a'}"
+            f"@{row.get('applied_torque_abs_max_joint') or 'n/a'}"
         )
 
 
