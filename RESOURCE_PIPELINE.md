@@ -82,19 +82,34 @@ python tools/isaac_standing_diagnostic.py \
   --trace_out logs/standing/isaac_no_settle_raw_fall.npz
 ```
 
-Then sweep root height, sagittal standing pose, and ankle/knee damping in short runs:
+Then run a small coarse sweep for root height and sagittal standing pose:
 
 ```bash
 cd /ai/users/huangwy/exp2/TienKungLite-Lab
 export TIENKUNG_LITE_USD_REL_PATH=urdf/humanoid_publish_free_base/humanoid_publish_free_base.usd
 python tools/run_isaac_standing_sweep.py \
-  --run-dir logs/standing/isaac_sweep_$(date +%Y%m%d_%H%M%S) \
+  --run-dir logs/standing/isaac_pose_sweep_$(date +%Y%m%d_%H%M%S) \
   --duration 3 \
   --settle-time 0 \
-  --root-zs 0.90 0.95 1.00 1.05 \
-  --hip-pitch-targets -0.40 -0.45 -0.50 \
-  --knee-pitch-targets 0.80 0.90 1.00 \
-  --ankle-pitch-targets -0.35 -0.42 -0.50 \
+  --root-zs 0.95 1.00 \
+  --hip-pitch-targets -0.45 -0.50 \
+  --knee-pitch-targets 0.90 1.00 \
+  --ankle-pitch-targets -0.42 -0.50
+```
+
+After choosing the best pose row from `*_summary.csv`, sweep a small PD matrix around that pose:
+
+```bash
+cd /ai/users/huangwy/exp2/TienKungLite-Lab
+export TIENKUNG_LITE_USD_REL_PATH=urdf/humanoid_publish_free_base/humanoid_publish_free_base.usd
+python tools/run_isaac_standing_sweep.py \
+  --run-dir logs/standing/isaac_pd_sweep_$(date +%Y%m%d_%H%M%S) \
+  --duration 3 \
+  --settle-time 0 \
+  --root-zs 1.00 \
+  --hip-pitch-targets -0.45 \
+  --knee-pitch-targets 0.90 \
+  --ankle-pitch-targets -0.42 \
   --knee-pitch-kd-scales 1.0 1.5 2.0 \
   --ankle-pitch-kp-scales 1.0 2.0 3.0 \
   --ankle-pitch-kd-scales 1.0 2.0 3.0
