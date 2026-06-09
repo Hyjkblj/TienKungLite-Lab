@@ -203,6 +203,30 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--flat-sole-feet-only",
+        action="store_true",
+        help=(
+            "Only replace ankle_roll_l/r_link collisions with diagnostic flat box soles. "
+            "This is for Isaac contact-stability diagnosis, not a final physical asset."
+        ),
+    )
+    parser.add_argument(
+        "--flat-sole-size",
+        nargs=3,
+        type=float,
+        metavar=("X", "Y", "Z"),
+        default=(0.23, 0.08, 0.03),
+        help="URDF box size for --flat-sole-feet-only, in meters. Defaults to 0.23 0.08 0.03.",
+    )
+    parser.add_argument(
+        "--flat-sole-origin",
+        nargs=3,
+        type=float,
+        metavar=("X", "Y", "Z"),
+        default=(0.035, 0.0, -0.042),
+        help="URDF collision origin xyz for --flat-sole-feet-only, in meters. Defaults to 0.035 0 -0.042.",
+    )
+    parser.add_argument(
         "--replace-ankle-roll-collisions-with-reference",
         action="store_true",
         help=(
@@ -249,9 +273,7 @@ def _resolve_paths(args: argparse.Namespace) -> tuple[Path, Path, Path]:
     output_urdf = (
         Path(args.output_urdf).expanduser().resolve()
         if args.output_urdf
-        else candidate_urdf.with_name(
-            f"{candidate_urdf.stem}.{'reference_feet' if args.reference_feet_only else 'reference_aligned'}.urdf"
-        )
+        else candidate_urdf.with_name(f"{candidate_urdf.stem}.{_default_output_suffix(args)}.urdf")
     )
 
     if not reference_urdf.is_file() and _reference_override_requested():
@@ -260,6 +282,14 @@ def _resolve_paths(args: argparse.Namespace) -> tuple[Path, Path, Path]:
         raise FileNotFoundError(f"Candidate URDF not found: {candidate_urdf}")
 
     return reference_urdf, candidate_urdf, output_urdf
+
+
+def _default_output_suffix(args: argparse.Namespace) -> str:
+    if args.reference_feet_only:
+        return "reference_feet"
+    if args.flat_sole_feet_only:
+        return "flat_sole"
+    return "reference_aligned"
 
 
 def _build_reference_link_collision_counts(root: ET.Element) -> dict[str, int]:
@@ -599,6 +629,28 @@ def _with_reference_foot_support_overrides(
     return updated
 
 
+def _with_flat_sole_foot_collision_specs(
+    reference_collision_specs: dict[str, tuple[dict[str, object], ...]],
+    *,
+    size_xyz: tuple[float, float, float],
+    origin_xyz: tuple[float, float, float],
+) -> dict[str, tuple[dict[str, object], ...]]:
+    updated = dict(reference_collision_specs)
+    size_text = " ".join(f"{float(value):g}" for value in size_xyz)
+    origin_text = " ".join(f"{float(value):g}" for value in origin_xyz)
+    for side, link_name in (("left", "ankle_roll_l_link"), ("right", "ankle_roll_r_link")):
+        updated[link_name] = (
+            _normalize_collision_spec(
+                {
+                    "name": f"sole_{side}",
+                    "origin": {"xyz": origin_text, "rpy": "0 0 0"},
+                    "geometry": {"tag": "box", "attrib": {"size": size_text}},
+                }
+            ),
+        )
+    return updated
+
+
 def _write_xml(output_path: Path, tree: ET.ElementTree) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     indent = getattr(ET, "indent", None)
@@ -615,6 +667,11 @@ def main() -> None:
         args.sync_link_mass = False
         args.zero_candidate_only_fixed_link_mass = False
         args.replace_ankle_roll_collisions_with_reference = True
+    if args.flat_sole_feet_only:
+        args.sync_collision_topology = False
+        args.sync_joint_limits = False
+        args.sync_link_mass = False
+        args.zero_candidate_only_fixed_link_mass = False
 
     reference_urdf, candidate_urdf, output_urdf = _resolve_paths(args)
 
@@ -643,6 +700,12 @@ def main() -> None:
         support_x=args.reference_feet_support_x,
         support_length=args.reference_feet_support_length,
     )
+    if args.flat_sole_feet_only:
+        reference_collision_specs = _with_flat_sole_foot_collision_specs(
+            reference_collision_specs,
+            size_xyz=tuple(args.flat_sole_size),
+            origin_xyz=tuple(args.flat_sole_origin),
+        )
 
     _log(f"[INFO] reference_source: {reference_source}")
     _log(f"[INFO] candidate_urdf: {candidate_urdf}")
@@ -652,6 +715,12 @@ def main() -> None:
             "[INFO] reference_feet_support_override: "
             f"x={args.reference_feet_support_x if args.reference_feet_support_x is not None else 'reference'}, "
             f"length={args.reference_feet_support_length if args.reference_feet_support_length is not None else 'reference'}"
+        )
+    if args.flat_sole_feet_only:
+        _log(
+            "[INFO] flat_sole_feet_override: "
+            f"size={' '.join(f'{float(value):g}' for value in args.flat_sole_size)}, "
+            f"origin={' '.join(f'{float(value):g}' for value in args.flat_sole_origin)}"
         )
     fixed_joint_children = _build_fixed_joint_children(candidate_root)
 
@@ -727,6 +796,8 @@ def main() -> None:
 
     requested_replacement_links = _parse_requested_link_names(args.replace_collision_links_with_reference)
     if args.replace_ankle_roll_collisions_with_reference:
+        requested_replacement_links.update({"ankle_roll_l_link", "ankle_roll_r_link"})
+    if args.flat_sole_feet_only:
         requested_replacement_links.update({"ankle_roll_l_link", "ankle_roll_r_link"})
     if args.replace_all_primitive_collisions_with_reference:
         requested_replacement_links.update(

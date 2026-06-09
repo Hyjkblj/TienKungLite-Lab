@@ -127,6 +127,24 @@ class AlignRealLiteUrdfToReferenceTests(unittest.TestCase):
 
             self.assertTrue(candidate_urdf.with_name("humanoid_publish.reference_feet.urdf").is_file())
 
+    def test_flat_sole_feet_only_default_output_name_is_explicit(self) -> None:
+        module = load_module()
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            candidate_urdf = Path(tmp_dir) / "asset" / "urdf" / "humanoid_publish.urdf"
+            _write_candidate_urdf(candidate_urdf)
+
+            argv = [
+                "align_real_lite_urdf_to_reference.py",
+                "--flat-sole-feet-only",
+                "--candidate-urdf",
+                str(candidate_urdf),
+            ]
+            with mock.patch.object(sys, "argv", argv):
+                module.main()
+
+            self.assertTrue(candidate_urdf.with_name("humanoid_publish.flat_sole.urdf").is_file())
+
     def test_reference_feet_support_overrides_update_cylinder_x_and_length(self) -> None:
         module = load_module()
 
@@ -160,6 +178,52 @@ class AlignRealLiteUrdfToReferenceTests(unittest.TestCase):
             self.assertIsNotNone(cylinder)
             self.assertEqual(origin.get("xyz").split()[0], "0.07")
             self.assertEqual(cylinder.get("length"), "0.34")
+
+    def test_flat_sole_feet_only_replaces_feet_with_box_soles_without_syncing_limits(self) -> None:
+        module = load_module()
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            candidate_urdf = tmp_path / "asset" / "urdf" / "humanoid_publish.urdf"
+            output_urdf = tmp_path / "asset" / "urdf" / "humanoid_publish.flat_sole.urdf"
+            _write_candidate_urdf(candidate_urdf)
+
+            argv = [
+                "align_real_lite_urdf_to_reference.py",
+                "--flat-sole-feet-only",
+                "--flat-sole-size",
+                "0.24",
+                "0.10",
+                "0.03",
+                "--flat-sole-origin",
+                "0.04",
+                "0.0",
+                "-0.045",
+                "--candidate-urdf",
+                str(candidate_urdf),
+                "--output-urdf",
+                str(output_urdf),
+            ]
+            with mock.patch.object(sys, "argv", argv):
+                module.main()
+
+            root = ET.parse(output_urdf).getroot()
+
+        self.assertEqual(_collision_tags(root, "ankle_roll_l_link"), ["box"])
+        self.assertEqual(_collision_tags(root, "ankle_roll_r_link"), ["box"])
+
+        for collision in _collision_elements(root, "ankle_roll_l_link") + _collision_elements(root, "ankle_roll_r_link"):
+            origin = collision.find("origin")
+            box = collision.find("./geometry/box")
+            self.assertIsNotNone(origin)
+            self.assertIsNotNone(box)
+            self.assertEqual(origin.get("xyz"), "0.04 0 -0.045")
+            self.assertEqual(box.get("size"), "0.24 0.1 0.03")
+
+        left_limit = root.find("./joint[@name='ankle_roll_l_joint']/limit")
+        self.assertIsNotNone(left_limit)
+        self.assertEqual(left_limit.get("lower"), "-0.1")
+        self.assertEqual(left_limit.get("upper"), "0.1")
 
 
 if __name__ == "__main__":

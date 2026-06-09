@@ -35,6 +35,14 @@ ASSET_VARIANTS = {
         description="Only replace ankle-roll foot mesh collisions with reference primitive toe rails.",
         align_args=("--reference-feet-only",),
     ),
+    "flat_sole": AssetVariant(
+        name="flat_sole",
+        description=(
+            "Only replace ankle-roll foot mesh collisions with diagnostic flat box soles "
+            "matching the MuJoCo sole dimensions."
+        ),
+        align_args=("--flat-sole-feet-only",),
+    ),
     "reference_feet_mass": AssetVariant(
         name="reference_feet_mass",
         description="Reference primitive feet plus reference link masses, without joint-limit or collision-topology sync.",

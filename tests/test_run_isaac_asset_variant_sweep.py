@@ -55,6 +55,21 @@ class RunIsaacAssetVariantSweepTests(unittest.TestCase):
 
         self.assertIsNone(command)
 
+    def test_flat_sole_variant_uses_flat_sole_alignment_flag(self) -> None:
+        module = load_module()
+        variant = module.ASSET_VARIANTS["flat_sole"]
+
+        command = module._build_align_command(
+            variant,
+            candidate_urdf=Path("/asset/urdf/humanoid_publish.urdf"),
+            output_urdf=Path("/asset/urdf/humanoid_publish.flat_sole.urdf"),
+            reference_asset_root=None,
+            reference_urdf=None,
+        )
+
+        self.assertIsNotNone(command)
+        self.assertIn("--flat-sole-feet-only", command)
+
     def test_variant_usd_subdir_is_unique(self) -> None:
         module = load_module()
 

@@ -300,6 +300,23 @@ python tools/run_isaac_asset_variant_sweep.py \
 
 Ranked output is written to `isaac_asset_variant_summary.csv`. If `reference_feet_mass_zero_fixed` or `reference_aligned_mass_zero_fixed` clearly outperforms `reference_feet`, treat the standing issue as an asset mass/inertia/import problem before doing more PPO or pose sweeps.
 
+If `reference_feet` remains best but the hold time is extremely sensitive to sub-millimeter `root_z`, run a flat-sole diagnostic before sweeping more pose values. This replaces the two round toe rails with one box sole per foot, matching the MuJoCo sole dimensions:
+
+```bash
+cd /ai/users/huangwy/exp2/TienKungLite-Lab
+git pull --ff-only origin main
+python tools/run_isaac_asset_variant_sweep.py \
+  --run-dir logs/standing/isaac_flat_sole_contact_$(date +%Y%m%d_%H%M%S) \
+  --variants reference_feet flat_sole \
+  --duration 10 \
+  --settle-time 0 \
+  --root-z 0.76984 \
+  --hip-pitch-target -0.55 \
+  --knee-pitch-target 1.00 \
+  --ankle-pitch-target -0.50 \
+  --ankle-pitch-kd-scale 3.0
+```
+
 Only after Isaac free-base hold is stable should MuJoCo hold be used as a sim2sim check:
 
 ```bash
