@@ -317,6 +317,21 @@ python tools/run_isaac_asset_variant_sweep.py \
   --ankle-pitch-kd-scale 3.0
 ```
 
+If flat-sole and PD sweeps still do not exceed a few seconds, stop pure zero-action PD search and train the dedicated stand policy. The current seed pose for that task is the best grounded static candidate found so far: `root_z=0.76984`, `hip=-0.55`, `knee=1.00`, `ankle=-0.50`, reference-feet USD, and default hip/knee damping.
+
+```bash
+cd /ai/users/huangwy/exp2/TienKungLite-Lab
+git pull --ff-only origin main
+export TIENKUNG_LITE_USD_REL_PATH=urdf/humanoid_publish_asset_variant_reference_feet/humanoid_publish_asset_variant_reference_feet.usd
+python train_real_lite.py \
+  --task stand_real_lite \
+  --headless \
+  --logger tensorboard \
+  --num_envs 4096 \
+  --max_iterations 3000 \
+  --run_name stand_seed_rz_0p76984_reference_feet
+```
+
 Only after Isaac free-base hold is stable should MuJoCo hold be used as a sim2sim check:
 
 ```bash

@@ -174,6 +174,14 @@ TASK_PRESETS = {
         "amp_motion_file": DATASETS_DIR / "motion_amp_expert" / "upper_body.txt",
         "display_motion_file": DATASETS_DIR / "motion_visualization" / "upper_body.txt",
     },
+    "stand_real_lite": {
+        "gait_air_ratio_l": 0.0,
+        "gait_air_ratio_r": 0.0,
+        "gait_phase_offset_l": 0.0,
+        "gait_phase_offset_r": 0.0,
+        "gait_cycle": 1.0,
+        "display_motion_file": DATASETS_DIR / "motion_visualization" / "upper_body.txt",
+    },
 }
 
 TASK_NAMES = tuple(TASK_PRESETS.keys())

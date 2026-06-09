@@ -33,6 +33,11 @@ TASK_COMMAND_RANGES = {
         "lin_vel_y": (0.0, 0.0),
         "ang_vel_z": (0.0, 0.0),
     },
+    "stand_real_lite": {
+        "lin_vel_x": (0.0, 0.0),
+        "lin_vel_y": (0.0, 0.0),
+        "ang_vel_z": (0.0, 0.0),
+    },
 }
 
 JOINT_STIFFNESS_PATTERNS = {
