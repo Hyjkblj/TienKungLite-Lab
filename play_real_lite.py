@@ -59,7 +59,7 @@ def main():
     env_cfg.scene.max_episode_length_s = 40.0
     env_cfg.scene.num_envs = 50
     env_cfg.scene.env_spacing = 2.5
-    if args_cli.task == "upper_body_real_lite":
+    if args_cli.task in {"upper_body_real_lite", "stand_real_lite"}:
         env_cfg.commands.rel_standing_envs = 1.0
         env_cfg.commands.rel_heading_envs = 0.0
         env_cfg.commands.heading_command = False
