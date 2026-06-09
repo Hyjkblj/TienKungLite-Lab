@@ -62,6 +62,26 @@ def _run_shutdown_step(step_name: str, callback) -> None:
     _print_shutdown(f"Completed {step_name}")
 
 
+def _resolve_policy_init_checkpoint(checkpoint: str) -> Path:
+    checkpoint_path = Path(checkpoint).expanduser()
+    if not checkpoint_path.is_absolute():
+        checkpoint_path = (PIPELINE_DIR / checkpoint_path).resolve()
+    if not checkpoint_path.is_file():
+        raise FileNotFoundError(f"Policy init checkpoint does not exist: {checkpoint_path}")
+    return checkpoint_path
+
+
+def _load_policy_init_checkpoint(runner, checkpoint: str, device: str) -> None:
+    checkpoint_path = _resolve_policy_init_checkpoint(checkpoint)
+    loaded_dict = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    if "model_state_dict" not in loaded_dict:
+        raise KeyError(f"Checkpoint is missing model_state_dict: {checkpoint_path}")
+
+    # This intentionally loads only actor-critic weights. Optimizer, AMP discriminator, and iteration state stay fresh.
+    runner.alg.policy.load_state_dict(loaded_dict["model_state_dict"], strict=True)
+    print(f"[INFO] Initialized policy weights from checkpoint: {checkpoint_path}")
+
+
 def main():
     register_tasks()
     env_cfg, agent_cfg = task_registry.get_cfgs(args_cli.task)
@@ -98,6 +118,11 @@ def main():
             )
         runner_class = _RUNNERS[agent_cfg.runner_class_name]
         runner = runner_class(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+
+        if args_cli.init_policy_checkpoint is not None:
+            if agent_cfg.resume:
+                raise ValueError("--init_policy_checkpoint is for fresh training; do not combine it with --resume.")
+            _load_policy_init_checkpoint(runner, args_cli.init_policy_checkpoint, agent_cfg.device)
 
         if agent_cfg.resume:
             resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)

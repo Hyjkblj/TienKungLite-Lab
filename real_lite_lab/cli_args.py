@@ -14,6 +14,12 @@ def add_rsl_rl_args(parser: argparse.ArgumentParser):
     arg_group.add_argument("--load_run", type=str, default=None, help="Run directory to resume from.")
     arg_group.add_argument("--checkpoint", type=str, default=None, help="Checkpoint filename to resume from.")
     arg_group.add_argument(
+        "--init_policy_checkpoint",
+        type=str,
+        default=None,
+        help="Actor-critic checkpoint used only to initialize policy weights before new training.",
+    )
+    arg_group.add_argument(
         "--logger",
         type=str,
         default=None,

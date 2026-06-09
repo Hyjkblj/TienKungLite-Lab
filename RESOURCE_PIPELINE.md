@@ -332,6 +332,50 @@ python train_real_lite.py \
   --run_name stand_seed_rz_0p76984_reference_feet
 ```
 
+Evaluate the trained stand checkpoint before starting locomotion. The deterministic check should pass first, then the
+reset-noise check should also pass:
+
+```bash
+cd /ai/users/huangwy/exp2/TienKungLite-Lab
+git pull --ff-only origin main
+export TIENKUNG_LITE_USD_REL_PATH=urdf/humanoid_publish_asset_variant_reference_feet/humanoid_publish_asset_variant_reference_feet.usd
+RUN_DIR=$(ls -td logs/stand_real_lite/*stand_seed_rz_0p76984_reference_feet* | head -1)
+
+python eval_stand_real_lite.py \
+  --task stand_real_lite \
+  --headless \
+  --num_envs 128 \
+  --duration_s 30 \
+  --load_run "$(basename "$RUN_DIR")"
+
+python eval_stand_real_lite.py \
+  --task stand_real_lite \
+  --headless \
+  --num_envs 128 \
+  --duration_s 30 \
+  --keep_reset_noise \
+  --load_run "$(basename "$RUN_DIR")"
+```
+
+After both stand evaluations pass, warm-start walking from the stand actor-critic weights. This is not a normal
+`--resume`: walk uses `AmpOnPolicyRunner`, so the AMP discriminator and optimizer state must start fresh.
+
+```bash
+cd /ai/users/huangwy/exp2/TienKungLite-Lab
+export TIENKUNG_LITE_USD_REL_PATH=urdf/humanoid_publish_asset_variant_reference_feet/humanoid_publish_asset_variant_reference_feet.usd
+STAND_RUN=$(ls -td logs/stand_real_lite/*stand_seed_rz_0p76984_reference_feet* | head -1)
+STAND_CKPT=$(ls "$STAND_RUN"/model_*.pt | sort -V | tail -1)
+
+python train_real_lite.py \
+  --task walk_real_lite \
+  --headless \
+  --logger tensorboard \
+  --num_envs 4096 \
+  --max_iterations 5000 \
+  --run_name walk_warmstart_from_stand_reference_feet \
+  --init_policy_checkpoint "$STAND_CKPT"
+```
+
 Only after Isaac free-base hold is stable should MuJoCo hold be used as a sim2sim check:
 
 ```bash
