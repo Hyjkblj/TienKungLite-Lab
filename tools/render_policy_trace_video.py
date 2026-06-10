@@ -20,6 +20,7 @@ if str(PIPELINE_DIR) not in sys.path:
     sys.path.insert(0, str(PIPELINE_DIR))
 
 from real_lite_lab.constants import MJCF_DIR, POLICY_JOINT_NAMES
+from real_lite_lab.mjcf_mesh_fallback import build_mesh_safe_model, ensure_offscreen_framebuffer_size
 from real_lite_lab.render_camera import camera_preset_alias_names, camera_preset_names, get_camera_preset
 
 
@@ -28,6 +29,27 @@ def _make_writer(output_path: Path, fps: float):
         raise RuntimeError("imageio is not installed; cannot write mp4.")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     return imageio.get_writer(str(output_path), fps=fps, codec="libx264")
+
+
+def _load_model_with_mesh_fallback(model_path: Path) -> mujoco.MjModel:
+    try:
+        return mujoco.MjModel.from_xml_path(str(model_path))
+    except ValueError as exc:
+        error_text = str(exc)
+        if "decoder failed for mesh file" not in error_text:
+            raise
+
+        fallback_result = build_mesh_safe_model(model_path)
+        if fallback_result is None:
+            raise
+
+        stripped_meshes = ", ".join(fallback_result.stripped_mesh_names)
+        print(
+            "[WARN] MuJoCo could not load one or more visual meshes. "
+            f"Retrying with incompatible meshes removed: {stripped_meshes}"
+        )
+        print(f"[WARN] Using fallback model: {fallback_result.model_path}")
+        return mujoco.MjModel.from_xml_path(str(fallback_result.model_path))
 
 
 def _configure_camera(camera_name: str | None) -> mujoco.MjvCamera | str | None:
@@ -91,7 +113,11 @@ def render_trace_video(
     if joint_pos_policy.shape != (root_pos.shape[0], len(POLICY_JOINT_NAMES)):
         raise ValueError(f"Unexpected joint_pos_policy shape: {joint_pos_policy.shape}")
 
-    model = mujoco.MjModel.from_xml_path(str(model_path))
+    model = _load_model_with_mesh_fallback(model_path)
+    framebuffer_size = ensure_offscreen_framebuffer_size(model, width=width, height=height)
+    if framebuffer_size is not None:
+        print(f"[INFO] Offscreen framebuffer resized to: {framebuffer_size[0]}x{framebuffer_size[1]}")
+
     data = mujoco.MjData(model)
     qpos_addresses = _policy_joint_qpos_addresses(model)
     renderer = mujoco.Renderer(model, height=height, width=width)
