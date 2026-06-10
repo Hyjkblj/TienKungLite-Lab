@@ -194,6 +194,9 @@ def main() -> None:
         vx_error_sum = torch.zeros(env.num_envs, device=env.device)
         vy_error_sum = torch.zeros(env.num_envs, device=env.device)
         wz_error_sum = torch.zeros(env.num_envs, device=env.device)
+        vx_sum = torch.zeros(env.num_envs, device=env.device)
+        vy_sum = torch.zeros(env.num_envs, device=env.device)
+        wz_sum = torch.zeros(env.num_envs, device=env.device)
         metric_samples = torch.zeros(env.num_envs, device=env.device)
 
         with torch.inference_mode():
@@ -223,6 +226,9 @@ def main() -> None:
                     vx_error_sum[alive] += torch.abs(command[:, 0] - lin_vel_b[:, 0])[alive]
                     vy_error_sum[alive] += torch.abs(command[:, 1] - lin_vel_b[:, 1])[alive]
                     wz_error_sum[alive] += torch.abs(command[:, 2] - ang_vel_w[:, 2])[alive]
+                    vx_sum[alive] += lin_vel_b[:, 0][alive]
+                    vy_sum[alive] += lin_vel_b[:, 1][alive]
+                    wz_sum[alive] += ang_vel_w[:, 2][alive]
                     metric_samples[alive] += 1.0
 
                 if not torch.any(alive):
@@ -234,6 +240,7 @@ def main() -> None:
         samples = torch.clamp(metric_samples, min=1.0)
         failed_times = first_reset_time[failed]
         first_failure = float(failed_times.min().cpu().item()) if failed_times.numel() else target_duration
+        final_root_delta = env.robot.data.root_pos_w[:, :2] - env.scene.env_origins[:, :2]
 
         print("[RESULT] walk policy evaluation")
         print(f"[RESULT] checkpoint={checkpoint_path}")
@@ -257,6 +264,17 @@ def main() -> None:
             f"[RESULT] tracking_abs_error_mean: vx={_mean_or_zero(vx_error_sum / samples):.3f}, "
             f"vy={_mean_or_zero(vy_error_sum / samples):.3f}, "
             f"wz={_mean_or_zero(wz_error_sum / samples):.3f}"
+        )
+        print(
+            f"[RESULT] measured_velocity_mean: vx={_mean_or_zero(vx_sum / samples):.3f}, "
+            f"vy={_mean_or_zero(vy_sum / samples):.3f}, "
+            f"wz={_mean_or_zero(wz_sum / samples):.3f}"
+        )
+        print(
+            f"[RESULT] final_displacement: x_mean={_mean_or_zero(final_root_delta[:, 0]):.3f}, "
+            f"x_min={float(final_root_delta[:, 0].min().cpu().item()):.3f}, "
+            f"x_max={float(final_root_delta[:, 0].max().cpu().item()):.3f}, "
+            f"abs_y_mean={_mean_or_zero(torch.abs(final_root_delta[:, 1])):.3f}"
         )
         print(
             f"[RESULT] alive_env_metrics: max_tilt_deg={_max_or_zero(max_tilt):.2f}, "
