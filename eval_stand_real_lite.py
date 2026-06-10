@@ -5,6 +5,7 @@ import sys
 import traceback
 from pathlib import Path
 
+import numpy as np
 import torch
 from debug_signals import install_stack_dump_signal
 from isaaclab.app import AppLauncher
@@ -30,6 +31,7 @@ parser.add_argument(
     action="store_true",
     help="Keep the stand task's reset pose/joint randomization for a robustness check.",
 )
+parser.add_argument("--trace_out", default=None, help="Optional .npz trace path for rendering a stand-policy video.")
 cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
@@ -126,7 +128,8 @@ def main() -> None:
     env_class = task_registry.get_task_class(args_cli.task)
 
     env_cfg.scene.num_envs = args_cli.num_envs
-    env_cfg.scene.max_episode_length_s = args_cli.duration_s
+    # Keep the env from resetting on the final evaluation frame, so traces end on the real policy state.
+    env_cfg.scene.max_episode_length_s = args_cli.duration_s + 1.0
     env_cfg.scene.env_spacing = 2.5
     env_cfg.scene.terrain_type = "plane"
     env_cfg.scene.terrain_generator = None
@@ -173,12 +176,31 @@ def main() -> None:
         max_bad_contact = torch.zeros(env.num_envs, device=env.device)
         min_foot_force = torch.full((env.num_envs,), float("inf"), device=env.device)
         max_torque = torch.zeros(env.num_envs, device=env.device)
+        trace = {
+            "time": [],
+            "root_pos": [],
+            "root_quat_wxyz": [],
+            "joint_pos_policy": [],
+        }
+
+        def append_trace(time_s: float) -> None:
+            if args_cli.trace_out is None:
+                return
+            trace["time"].append(float(time_s))
+            trace["root_pos"].append(env.robot.data.root_pos_w[0].detach().cpu().numpy().copy())
+            trace["root_quat_wxyz"].append(env.robot.data.root_quat_w[0].detach().cpu().numpy().copy())
+            trace["joint_pos_policy"].append(
+                env.robot.data.joint_pos[0, env.policy_joint_ids].detach().cpu().numpy().copy()
+            )
+
+        append_trace(0.0)
 
         with torch.inference_mode():
             for step_idx in range(max_steps):
                 actions = policy(obs)
                 obs, _, dones, _ = env.step(actions)
                 elapsed_s = min((step_idx + 1) * env.step_dt, target_duration)
+                append_trace(elapsed_s)
 
                 just_done = dones & alive
                 if torch.any(just_done):
@@ -236,6 +258,18 @@ def main() -> None:
         if failed.any():
             print("[RESULT] verdict=FAIL")
             raise RuntimeError("Stand policy did not survive the full evaluation duration in every environment.")
+        if args_cli.trace_out is not None:
+            trace_path = Path(args_cli.trace_out)
+            trace_path.parent.mkdir(parents=True, exist_ok=True)
+            np.savez_compressed(
+                trace_path,
+                time=np.asarray(trace["time"], dtype=np.float64),
+                root_pos=np.asarray(trace["root_pos"], dtype=np.float64),
+                root_quat_wxyz=np.asarray(trace["root_quat_wxyz"], dtype=np.float64),
+                joint_pos_policy=np.asarray(trace["joint_pos_policy"], dtype=np.float64),
+                policy_joint_names=np.asarray(env.policy_joint_names),
+            )
+            print(f"[RESULT] trace_out={trace_path}")
         print("[RESULT] verdict=PASS")
     finally:
         if runner is not None:

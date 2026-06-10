@@ -426,6 +426,33 @@ cd /ai/users/huangwy/exp2/TienKungLite-Lab
 RUN_MUJOCO_HOLD=1 bash scripts/server_resource_pipeline.sh
 ```
 
+For a stable standing video asset, do not use MuJoCo `--control_mode hold` as the source of truth. Record the verified
+Isaac stand policy trace first, then render that trace to mp4 with MuJoCo visuals only:
+
+```bash
+cd /ai/users/huangwy/exp2/TienKungLite-Lab
+git pull --ff-only origin main
+export TIENKUNG_LITE_USD_REL_PATH=urdf/humanoid_publish_asset_variant_reference_feet/humanoid_publish_asset_variant_reference_feet.usd
+STAND_RUN=$(ls -td logs/stand_real_lite/*stand_seed_rz_0p76984_reference_feet* | head -1)
+
+python eval_stand_real_lite.py \
+  --task stand_real_lite \
+  --headless \
+  --num_envs 1 \
+  --duration_s 30 \
+  --load_run "$(basename "$STAND_RUN")" \
+  --trace_out logs/standing/videos/stand_policy_30s_trace.npz
+
+python tools/generate_real_lite_mjcf.py
+python tools/render_policy_trace_video.py \
+  --trace logs/standing/videos/stand_policy_30s_trace.npz \
+  --output logs/standing/videos/tienkung_lite_stand_policy_30s.mp4 \
+  --camera follow_side \
+  --fps 30 \
+  --width 1280 \
+  --height 720
+```
+
 ## Acceptance Criteria
 
 - Local audit has no blockers except `FREE_BASE_USD_MISSING` before the server export step.
