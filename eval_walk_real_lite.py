@@ -5,6 +5,7 @@ import sys
 import traceback
 from pathlib import Path
 
+import numpy as np
 import torch
 from debug_signals import install_stack_dump_signal
 from isaaclab.app import AppLauncher
@@ -33,6 +34,37 @@ parser.add_argument("--keep_reset_noise", action="store_true")
 parser.add_argument("--keep_domain_rand", action="store_true")
 parser.add_argument("--enable_noise", action="store_true")
 parser.add_argument("--enable_terrain", action="store_true")
+parser.add_argument("--trace_out", default=None, help="Optional .npz trace path for rendering a walk-policy video.")
+parser.add_argument(
+    "--min_linear_speed_ratio",
+    type=float,
+    default=0.5,
+    help="Minimum mean velocity along the commanded linear direction, as a fraction of command speed.",
+)
+parser.add_argument(
+    "--min_linear_progress_ratio",
+    type=float,
+    default=0.5,
+    help="Minimum final displacement along the commanded linear direction, as a fraction of expected progress.",
+)
+parser.add_argument(
+    "--max_lateral_drift_ratio",
+    type=float,
+    default=0.5,
+    help="Maximum mean lateral drift as a fraction of expected linear progress.",
+)
+parser.add_argument(
+    "--max_lateral_drift_abs",
+    type=float,
+    default=0.25,
+    help="Absolute lower bound for allowed mean lateral drift in meters.",
+)
+parser.add_argument(
+    "--min_yaw_rate_ratio",
+    type=float,
+    default=0.5,
+    help="Minimum mean yaw rate as a fraction of commanded yaw rate when command_wz is non-zero.",
+)
 cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
@@ -132,6 +164,16 @@ def main() -> None:
         raise ValueError("--duration_s must be positive.")
     if args_cli.num_envs <= 0:
         raise ValueError("--num_envs must be positive.")
+    if args_cli.min_linear_speed_ratio < 0.0:
+        raise ValueError("--min_linear_speed_ratio must be non-negative.")
+    if args_cli.min_linear_progress_ratio < 0.0:
+        raise ValueError("--min_linear_progress_ratio must be non-negative.")
+    if args_cli.max_lateral_drift_ratio < 0.0:
+        raise ValueError("--max_lateral_drift_ratio must be non-negative.")
+    if args_cli.max_lateral_drift_abs < 0.0:
+        raise ValueError("--max_lateral_drift_abs must be non-negative.")
+    if args_cli.min_yaw_rate_ratio < 0.0:
+        raise ValueError("--min_yaw_rate_ratio must be non-negative.")
     if args_cli.task not in {"walk_real_lite", "run_real_lite"}:
         raise ValueError("eval_walk_real_lite.py expects walk_real_lite or run_real_lite.")
 
@@ -202,12 +244,31 @@ def main() -> None:
         world_vy_sum = torch.zeros(env.num_envs, device=env.device)
         metric_samples = torch.zeros(env.num_envs, device=env.device)
         last_root_delta = torch.zeros(env.num_envs, 2, device=env.device)
+        trace = {
+            "time": [],
+            "root_pos": [],
+            "root_quat_wxyz": [],
+            "joint_pos_policy": [],
+        }
+
+        def append_trace(time_s: float) -> None:
+            if args_cli.trace_out is None:
+                return
+            trace["time"].append(float(time_s))
+            trace["root_pos"].append(env.robot.data.root_pos_w[0].detach().cpu().numpy().copy())
+            trace["root_quat_wxyz"].append(env.robot.data.root_quat_w[0].detach().cpu().numpy().copy())
+            trace["joint_pos_policy"].append(
+                env.robot.data.joint_pos[0, env.policy_joint_ids].detach().cpu().numpy().copy()
+            )
+
+        append_trace(0.0)
 
         with torch.inference_mode():
             for step_idx in range(max_steps):
                 actions = policy(obs)
                 obs, _, dones, _ = env.step(actions)
                 elapsed_s = min((step_idx + 1) * env.step_dt, target_duration)
+                append_trace(elapsed_s)
 
                 just_done = dones & alive
                 if torch.any(just_done):
@@ -249,6 +310,51 @@ def main() -> None:
         samples = torch.clamp(metric_samples, min=1.0)
         failed_times = first_reset_time[failed]
         first_failure = float(failed_times.min().cpu().item()) if failed_times.numel() else target_duration
+        mean_body_vx = vx_sum / samples
+        mean_body_vy = vy_sum / samples
+        mean_wz = wz_sum / samples
+        mean_world_vx = world_vx_sum / samples
+        mean_world_vy = world_vy_sum / samples
+
+        command_xy = torch.tensor([args_cli.command_vx, args_cli.command_vy], dtype=torch.float32, device=env.device)
+        command_speed = float(torch.linalg.norm(command_xy).detach().cpu().item())
+        expected_progress = command_speed * target_duration
+        has_linear_command = command_speed > 1.0e-6
+        linear_speed_ok = True
+        linear_progress_ok = True
+        lateral_drift_ok = True
+        linear_speed_ratio = 1.0
+        linear_progress_ratio = 1.0
+        mean_world_velocity_along_command = 0.0
+        mean_progress_along_command = 0.0
+        mean_lateral_drift = 0.0
+        lateral_drift_limit = max(args_cli.max_lateral_drift_abs, args_cli.max_lateral_drift_ratio * expected_progress)
+
+        if has_linear_command:
+            command_dir = command_xy / command_speed
+            progress_along_command = last_root_delta @ command_dir
+            lateral_direction = torch.stack((-command_dir[1], command_dir[0]))
+            lateral_drift = last_root_delta @ lateral_direction
+            world_velocity_along_command = mean_world_vx * command_dir[0] + mean_world_vy * command_dir[1]
+            mean_progress_along_command = _mean_or_zero(progress_along_command)
+            mean_lateral_drift = _mean_or_zero(torch.abs(lateral_drift))
+            mean_world_velocity_along_command = _mean_or_zero(world_velocity_along_command)
+            linear_speed_ratio = mean_world_velocity_along_command / command_speed
+            linear_progress_ratio = mean_progress_along_command / max(expected_progress, 1.0e-6)
+            linear_speed_ok = linear_speed_ratio >= args_cli.min_linear_speed_ratio
+            linear_progress_ok = linear_progress_ratio >= args_cli.min_linear_progress_ratio
+            lateral_drift_ok = mean_lateral_drift <= lateral_drift_limit
+
+        has_yaw_command = abs(args_cli.command_wz) > 1.0e-6
+        yaw_rate_ok = True
+        yaw_rate_ratio = 1.0
+        mean_yaw_rate = _mean_or_zero(mean_wz)
+        if has_yaw_command:
+            yaw_rate_ratio = mean_yaw_rate / args_cli.command_wz
+            yaw_rate_ok = yaw_rate_ratio >= args_cli.min_yaw_rate_ratio
+
+        survival_ok = not failed.any()
+        walking_ok = survival_ok and linear_speed_ok and linear_progress_ok and lateral_drift_ok and yaw_rate_ok
 
         print("[RESULT] walk policy evaluation")
         print(f"[RESULT] checkpoint={checkpoint_path}")
@@ -274,13 +380,13 @@ def main() -> None:
             f"wz={_mean_or_zero(wz_error_sum / samples):.3f}"
         )
         print(
-            f"[RESULT] measured_velocity_mean: vx={_mean_or_zero(vx_sum / samples):.3f}, "
-            f"vy={_mean_or_zero(vy_sum / samples):.3f}, "
-            f"wz={_mean_or_zero(wz_sum / samples):.3f}"
+            f"[RESULT] measured_velocity_mean: vx={_mean_or_zero(mean_body_vx):.3f}, "
+            f"vy={_mean_or_zero(mean_body_vy):.3f}, "
+            f"wz={mean_yaw_rate:.3f}"
         )
         print(
-            f"[RESULT] measured_world_velocity_mean: vx={_mean_or_zero(world_vx_sum / samples):.3f}, "
-            f"vy={_mean_or_zero(world_vy_sum / samples):.3f}"
+            f"[RESULT] measured_world_velocity_mean: vx={_mean_or_zero(mean_world_vx):.3f}, "
+            f"vy={_mean_or_zero(mean_world_vy):.3f}"
         )
         print(
             f"[RESULT] final_displacement: x_mean={_mean_or_zero(last_root_delta[:, 0]):.3f}, "
@@ -295,9 +401,46 @@ def main() -> None:
             f"max_bad_contact_force={_max_or_zero(max_bad_contact):.2f}, "
             f"max_policy_torque={_max_or_zero(max_torque):.2f}"
         )
-        if failed.any():
+        if has_linear_command:
+            print(
+                f"[RESULT] linear_progress: command_speed={command_speed:.3f}, "
+                f"expected={expected_progress:.3f}m, along_mean={mean_progress_along_command:.3f}m, "
+                f"progress_ratio={linear_progress_ratio:.3f}, world_speed_along={mean_world_velocity_along_command:.3f}, "
+                f"speed_ratio={linear_speed_ratio:.3f}, lateral_abs_mean={mean_lateral_drift:.3f}m, "
+                f"lateral_limit={lateral_drift_limit:.3f}m"
+            )
+        else:
+            print("[RESULT] linear_progress: skipped because commanded linear velocity is zero.")
+        if has_yaw_command:
+            print(
+                f"[RESULT] yaw_tracking: command_wz={args_cli.command_wz:.3f}, "
+                f"measured_wz={mean_yaw_rate:.3f}, yaw_rate_ratio={yaw_rate_ratio:.3f}"
+            )
+        print(
+            "[RESULT] walking_checks: "
+            f"survival={'PASS' if survival_ok else 'FAIL'}, "
+            f"linear_speed={'PASS' if linear_speed_ok else 'FAIL'}, "
+            f"linear_progress={'PASS' if linear_progress_ok else 'FAIL'}, "
+            f"lateral_drift={'PASS' if lateral_drift_ok else 'FAIL'}, "
+            f"yaw_rate={'PASS' if yaw_rate_ok else 'FAIL'}"
+        )
+        print(f"[RESULT] walking_verdict={'PASS' if walking_ok else 'FAIL'}")
+        if args_cli.trace_out is not None:
+            trace_path = Path(args_cli.trace_out)
+            trace_path.parent.mkdir(parents=True, exist_ok=True)
+            np.savez_compressed(
+                trace_path,
+                time=np.asarray(trace["time"], dtype=np.float64),
+                root_pos=np.asarray(trace["root_pos"], dtype=np.float64),
+                root_quat_wxyz=np.asarray(trace["root_quat_wxyz"], dtype=np.float64),
+                joint_pos_policy=np.asarray(trace["joint_pos_policy"], dtype=np.float64),
+                policy_joint_names=np.asarray(env.policy_joint_names),
+                command=np.asarray([args_cli.command_vx, args_cli.command_vy, args_cli.command_wz], dtype=np.float64),
+            )
+            print(f"[RESULT] trace_out={trace_path}")
+        if not walking_ok:
             print("[RESULT] verdict=FAIL")
-            raise RuntimeError("Walk policy did not survive the full evaluation duration in every environment.")
+            raise RuntimeError("Walk policy did not satisfy the walking evaluation criteria.")
         print("[RESULT] verdict=PASS")
     finally:
         if runner is not None:
