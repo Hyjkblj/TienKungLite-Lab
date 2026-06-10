@@ -376,6 +376,31 @@ python train_real_lite.py \
   --init_policy_checkpoint "$STAND_CKPT"
 ```
 
+After walk training finishes, export and evaluate the policy in Isaac Lab before sim2sim:
+
+```bash
+cd /ai/users/huangwy/exp2/TienKungLite-Lab
+export TIENKUNG_LITE_USD_REL_PATH=urdf/humanoid_publish_asset_variant_reference_feet/humanoid_publish_asset_variant_reference_feet.usd
+RUN_DIR=$(ls -td logs/walk_real_lite/*walk_resume_from_1900* logs/walk_real_lite/*walk_warmstart_from_stand_reference_feet_retry_clean_gpu* 2>/dev/null | head -1)
+CKPT=$(ls "$RUN_DIR"/model_*.pt | sort -V | tail -1)
+
+python play_real_lite.py \
+  --task walk_real_lite \
+  --headless \
+  --num_envs 50 \
+  --load_run "$(basename "$RUN_DIR")" \
+  --checkpoint "$(basename "$CKPT")"
+
+python eval_walk_real_lite.py \
+  --task walk_real_lite \
+  --headless \
+  --num_envs 128 \
+  --duration_s 30 \
+  --command_vx 0.2 \
+  --load_run "$(basename "$RUN_DIR")" \
+  --checkpoint "$(basename "$CKPT")"
+```
+
 Only after Isaac free-base hold is stable should MuJoCo hold be used as a sim2sim check:
 
 ```bash
