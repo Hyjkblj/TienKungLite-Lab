@@ -140,7 +140,8 @@ def main() -> None:
     env_class = task_registry.get_task_class(args_cli.task)
 
     env_cfg.scene.num_envs = args_cli.num_envs
-    env_cfg.scene.max_episode_length_s = args_cli.duration_s
+    # Keep the env from resetting on the final evaluation frame, so final displacement is measured pre-reset.
+    env_cfg.scene.max_episode_length_s = args_cli.duration_s + 1.0
     env_cfg.scene.env_spacing = 2.5
     env_cfg.scene.height_scanner.enable_height_scan = False
     env_cfg.scene.height_scanner.drift_range = (0.0, 0.0)
@@ -197,7 +198,10 @@ def main() -> None:
         vx_sum = torch.zeros(env.num_envs, device=env.device)
         vy_sum = torch.zeros(env.num_envs, device=env.device)
         wz_sum = torch.zeros(env.num_envs, device=env.device)
+        world_vx_sum = torch.zeros(env.num_envs, device=env.device)
+        world_vy_sum = torch.zeros(env.num_envs, device=env.device)
         metric_samples = torch.zeros(env.num_envs, device=env.device)
+        last_root_delta = torch.zeros(env.num_envs, 2, device=env.device)
 
         with torch.inference_mode():
             for step_idx in range(max_steps):
@@ -213,11 +217,14 @@ def main() -> None:
 
                 if torch.any(alive):
                     root_pos = env.robot.data.root_pos_w
-                    root_xy_drift = torch.linalg.norm(root_pos[:, :2] - env.scene.env_origins[:, :2], dim=1)
+                    root_delta = root_pos[:, :2] - env.scene.env_origins[:, :2]
+                    root_xy_drift = torch.linalg.norm(root_delta, dim=1)
                     command = env.command_generator.command
                     lin_vel_b = env.robot.data.root_lin_vel_b
+                    lin_vel_w = env.robot.data.root_lin_vel_w
                     ang_vel_w = env.robot.data.root_ang_vel_w
 
+                    last_root_delta[alive] = root_delta[alive]
                     max_tilt[alive] = torch.maximum(max_tilt[alive], _tilt_deg(env.robot.data.projected_gravity_b)[alive])
                     min_root_z[alive] = torch.minimum(min_root_z[alive], root_pos[:, 2][alive])
                     max_root_xy_drift[alive] = torch.maximum(max_root_xy_drift[alive], root_xy_drift[alive])
@@ -229,6 +236,8 @@ def main() -> None:
                     vx_sum[alive] += lin_vel_b[:, 0][alive]
                     vy_sum[alive] += lin_vel_b[:, 1][alive]
                     wz_sum[alive] += ang_vel_w[:, 2][alive]
+                    world_vx_sum[alive] += lin_vel_w[:, 0][alive]
+                    world_vy_sum[alive] += lin_vel_w[:, 1][alive]
                     metric_samples[alive] += 1.0
 
                 if not torch.any(alive):
@@ -240,7 +249,6 @@ def main() -> None:
         samples = torch.clamp(metric_samples, min=1.0)
         failed_times = first_reset_time[failed]
         first_failure = float(failed_times.min().cpu().item()) if failed_times.numel() else target_duration
-        final_root_delta = env.robot.data.root_pos_w[:, :2] - env.scene.env_origins[:, :2]
 
         print("[RESULT] walk policy evaluation")
         print(f"[RESULT] checkpoint={checkpoint_path}")
@@ -271,10 +279,14 @@ def main() -> None:
             f"wz={_mean_or_zero(wz_sum / samples):.3f}"
         )
         print(
-            f"[RESULT] final_displacement: x_mean={_mean_or_zero(final_root_delta[:, 0]):.3f}, "
-            f"x_min={float(final_root_delta[:, 0].min().cpu().item()):.3f}, "
-            f"x_max={float(final_root_delta[:, 0].max().cpu().item()):.3f}, "
-            f"abs_y_mean={_mean_or_zero(torch.abs(final_root_delta[:, 1])):.3f}"
+            f"[RESULT] measured_world_velocity_mean: vx={_mean_or_zero(world_vx_sum / samples):.3f}, "
+            f"vy={_mean_or_zero(world_vy_sum / samples):.3f}"
+        )
+        print(
+            f"[RESULT] final_displacement: x_mean={_mean_or_zero(last_root_delta[:, 0]):.3f}, "
+            f"x_min={float(last_root_delta[:, 0].min().cpu().item()):.3f}, "
+            f"x_max={float(last_root_delta[:, 0].max().cpu().item()):.3f}, "
+            f"abs_y_mean={_mean_or_zero(torch.abs(last_root_delta[:, 1])):.3f}"
         )
         print(
             f"[RESULT] alive_env_metrics: max_tilt_deg={_max_or_zero(max_tilt):.2f}, "
