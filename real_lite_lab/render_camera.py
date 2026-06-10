@@ -20,6 +20,12 @@ CAMERA_PRESETS = {
         "elevation": -14.0,
         "lookat_offset": (0.0, 0.0, 0.9),
     },
+    "follow_front_full_body": {
+        "distance": 3.6,
+        "azimuth": 180.0,
+        "elevation": -8.0,
+        "lookat_offset": (0.0, 0.0, 0.35),
+    },
     "follow_topdiag": {
         "distance": 4.4,
         "azimuth": 135.0,
@@ -32,6 +38,8 @@ CAMERA_PRESET_ALIASES = {
     "diag": "follow_diag",
     "side": "follow_side",
     "front": "follow_front",
+    "front_full": "follow_front_full_body",
+    "front_full_body": "follow_front_full_body",
     "topdiag": "follow_topdiag",
 }
 

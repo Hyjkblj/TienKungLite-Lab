@@ -24,7 +24,7 @@ class RenderCameraTests(unittest.TestCase):
 
         self.assertEqual(
             module.camera_preset_names(),
-            ("follow_diag", "follow_side", "follow_front", "follow_topdiag"),
+            ("follow_diag", "follow_side", "follow_front", "follow_front_full_body", "follow_topdiag"),
         )
 
     def test_camera_presets_have_required_fields(self) -> None:
@@ -51,6 +51,8 @@ class RenderCameraTests(unittest.TestCase):
 
         self.assertEqual(module.resolve_camera_preset_name("side"), "follow_side")
         self.assertEqual(module.resolve_camera_preset_name("front"), "follow_front")
+        self.assertEqual(module.resolve_camera_preset_name("front_full"), "follow_front_full_body")
+        self.assertEqual(module.resolve_camera_preset_name("front_full_body"), "follow_front_full_body")
         self.assertEqual(module.resolve_camera_preset_name("diag"), "follow_diag")
         self.assertEqual(module.resolve_camera_preset_name("topdiag"), "follow_topdiag")
         self.assertEqual(module.get_camera_preset("side"), module.get_camera_preset("follow_side"))
