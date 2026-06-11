@@ -167,6 +167,29 @@ def _normalize_initial_yaw(root_pos: np.ndarray, root_rot_wxyz: np.ndarray) -> t
     return normalized_root_pos, normalized_root_rot_wxyz, initial_yaw
 
 
+def _align_travel_direction_to_x(root_pos: np.ndarray, root_rot_wxyz: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
+    root_pos = np.asarray(root_pos, dtype=np.float64)
+    root_rot_wxyz = np.asarray(root_rot_wxyz, dtype=np.float64)
+
+    if root_pos.shape[0] < 2:
+        return root_pos.copy(), root_rot_wxyz.copy(), 0.0
+
+    travel_xy = root_pos[-1, :2] - root_pos[0, :2]
+    travel_norm = np.linalg.norm(travel_xy)
+    if travel_norm < 1e-8:
+        return root_pos.copy(), root_rot_wxyz.copy(), 0.0
+
+    travel_yaw = float(np.arctan2(travel_xy[1], travel_xy[0]))
+    yaw_correction = Rotation.from_euler("z", -travel_yaw, degrees=False)
+
+    anchor = root_pos[0].copy()
+    aligned_root_pos = anchor + yaw_correction.apply(root_pos - anchor)
+    rotations = Rotation.from_quat(root_rot_wxyz[:, [1, 2, 3, 0]])
+    aligned_rotations = yaw_correction * rotations
+    aligned_root_rot_wxyz = aligned_rotations.as_quat()[:, [3, 0, 1, 2]]
+    return aligned_root_pos, aligned_root_rot_wxyz, travel_yaw
+
+
 def _apply_motion_profile(
     root_pos: np.ndarray,
     root_rot_wxyz: np.ndarray,
@@ -216,6 +239,7 @@ def convert_pkl_to_custom(
     output_txt,
     fps=None,
     normalize_initial_yaw=True,
+    align_travel_direction=False,
     source_order="auto",
     motion_profile="full_body",
 ):
@@ -234,6 +258,11 @@ def convert_pkl_to_custom(
     applied_initial_yaw = 0.0
     if normalize_initial_yaw:
         root_pos, root_rot, applied_initial_yaw = _normalize_initial_yaw(root_pos, root_rot)
+
+    applied_travel_yaw = 0.0
+    if align_travel_direction:
+        root_pos, root_rot, applied_travel_yaw = _align_travel_direction_to_x(root_pos, root_rot)
+
     root_pos, root_rot, dof_pos = _apply_motion_profile(
         root_pos,
         root_rot,
@@ -267,6 +296,8 @@ def convert_pkl_to_custom(
     _write_visualization_motion(output_path, data_output, fps)
     if normalize_initial_yaw:
         print(f"Normalized initial yaw by {-np.degrees(applied_initial_yaw):.3f} degrees.")
+    if align_travel_direction:
+        print(f"Aligned travel direction by {-np.degrees(applied_travel_yaw):.3f} degrees.")
     print(f"Using fps={fps:.6f}, source_order={source_order}, motion_profile={motion_profile}.")
     print(f"Successfully converted {input_pkl} to {output_txt}")
 
@@ -300,6 +331,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Keep the original world heading from the retargeted motion instead of aligning the first frame to +x.",
     )
+    parser.add_argument(
+        "--align_travel_direction",
+        action="store_true",
+        help="Rotate the whole trajectory so the net root displacement points along +x with near-zero lateral drift.",
+    )
     args = parser.parse_args()
 
     convert_pkl_to_custom(
@@ -307,6 +343,7 @@ if __name__ == "__main__":
         args.output_txt,
         args.fps,
         normalize_initial_yaw=not args.disable_initial_yaw_normalization,
+        align_travel_direction=args.align_travel_direction,
         source_order=args.source_order,
         motion_profile=args.motion_profile,
     )

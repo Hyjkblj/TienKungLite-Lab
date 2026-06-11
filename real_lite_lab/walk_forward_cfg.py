@@ -211,3 +211,16 @@ class RealLiteWalkForwardAgentCfg(RealLiteWalkAgentCfg):
     amp_reward_coef = 0.05
     amp_task_reward_lerp = 0.97
     min_normalized_std = [0.03] * POLICY_JOINT_COUNT
+
+
+@configclass
+class RealLiteWalkGmrForwardEnvCfg(RealLiteWalkForwardEnvCfg):
+    amp_motion_files_display = [str(TASK_PRESETS["walk_gmr_forward_real_lite"]["display_motion_file"])]
+
+
+@configclass
+class RealLiteWalkGmrForwardAgentCfg(RealLiteWalkForwardAgentCfg):
+    experiment_name = "walk_gmr_forward_real_lite"
+    neptune_project = "walk_gmr_forward_real_lite"
+    wandb_project = "walk_gmr_forward_real_lite"
+    amp_motion_files = [str(TASK_PRESETS["walk_gmr_forward_real_lite"]["amp_motion_file"])]
