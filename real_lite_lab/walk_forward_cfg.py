@@ -33,6 +33,7 @@ from .constants import (
     RIGHT_LEG_JOINT_NAMES,
     TASK_PRESETS,
 )
+from .isaaclab_compat import RslRlPpoActorCriticCfg, RslRlPpoAlgorithmCfg
 from .stand_cfg import STAND_ROOT_Z
 from .walk_cfg import RealLiteGaitCfg, RealLiteRewardCfg, RealLiteWalkAgentCfg, RealLiteWalkEnvCfg
 
@@ -171,6 +172,32 @@ class RealLiteWalkForwardEnvCfg(RealLiteWalkEnvCfg):
 @configclass
 class RealLiteWalkForwardAgentCfg(RealLiteWalkAgentCfg):
     max_iterations = 8000
+    policy = RslRlPpoActorCriticCfg(
+        class_name="ActorCritic",
+        init_noise_std=0.5,
+        noise_std_type="log",
+        actor_hidden_dims=[512, 256, 128],
+        critic_hidden_dims=[512, 256, 128],
+        activation="elu",
+    )
+    algorithm = RslRlPpoAlgorithmCfg(
+        class_name="AMPPPO",
+        value_loss_coef=1.0,
+        use_clipped_value_loss=True,
+        clip_param=0.2,
+        entropy_coef=0.002,
+        num_learning_epochs=5,
+        num_mini_batches=4,
+        learning_rate=3.0e-4,
+        schedule="adaptive",
+        gamma=0.99,
+        lam=0.95,
+        desired_kl=0.01,
+        max_grad_norm=1.0,
+        normalize_advantage_per_mini_batch=False,
+        symmetry_cfg=None,
+        rnd_cfg=None,
+    )
     experiment_name = "walk_forward_real_lite"
     neptune_project = "walk_forward_real_lite"
     wandb_project = "walk_forward_real_lite"

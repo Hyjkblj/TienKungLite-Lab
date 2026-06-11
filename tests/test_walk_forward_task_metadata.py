@@ -49,6 +49,12 @@ class WalkForwardTaskMetadataTests(unittest.TestCase):
         self.assertNotIn("RealLiteWalkEnvCfg.scene", cfg_text)
         self.assertNotIn("RealLiteWalkEnvCfg.robot", cfg_text)
 
+    def test_walk_forward_policy_uses_log_std(self) -> None:
+        cfg_text = (REPO_ROOT / "real_lite_lab" / "walk_forward_cfg.py").read_text(encoding="utf-8")
+
+        self.assertIn('noise_std_type="log"', cfg_text)
+        self.assertIn("learning_rate=3.0e-4", cfg_text)
+
 
 if __name__ == "__main__":
     unittest.main()
