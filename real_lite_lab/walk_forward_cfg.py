@@ -216,6 +216,20 @@ class RealLiteWalkForwardAgentCfg(RealLiteWalkAgentCfg):
 @configclass
 class RealLiteWalkGmrForwardEnvCfg(RealLiteWalkForwardEnvCfg):
     amp_motion_files_display = [str(TASK_PRESETS["walk_gmr_forward_real_lite"]["display_motion_file"])]
+    commands: CommandsCfg = CommandsCfg(
+        resampling_time_range=(10.0, 10.0),
+        rel_standing_envs=0.0,
+        rel_heading_envs=0.0,
+        heading_command=False,
+        heading_control_stiffness=0.0,
+        debug_vis=False,
+        ranges=CommandRangesCfg(
+            lin_vel_x=(0.60, 1.00),
+            lin_vel_y=(0.0, 0.0),
+            ang_vel_z=(0.0, 0.0),
+            heading=(0.0, 0.0),
+        ),
+    )
 
 
 @configclass
