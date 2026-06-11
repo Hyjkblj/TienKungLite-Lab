@@ -71,6 +71,27 @@ def _resolve_policy_init_checkpoint(checkpoint: str) -> Path:
     return checkpoint_path
 
 
+def _compatible_policy_init_state(source_state: dict[str, torch.Tensor], target_state: dict[str, torch.Tensor]):
+    compatible_state = {}
+    skipped_keys = []
+    converted_std_to_log_std = False
+
+    for key, target_value in target_state.items():
+        source_value = source_state.get(key)
+        if source_value is not None and source_value.shape == target_value.shape:
+            compatible_state[key] = source_value
+            continue
+
+        if key == "log_std" and "std" in source_state and source_state["std"].shape == target_value.shape:
+            compatible_state[key] = torch.log(torch.clamp(source_state["std"], min=1.0e-6))
+            converted_std_to_log_std = True
+            continue
+
+        skipped_keys.append(key)
+
+    return compatible_state, skipped_keys, converted_std_to_log_std
+
+
 def _load_policy_init_checkpoint(runner, checkpoint: str, device: str) -> None:
     checkpoint_path = _resolve_policy_init_checkpoint(checkpoint)
     loaded_dict = torch.load(checkpoint_path, map_location=device, weights_only=False)
@@ -78,8 +99,22 @@ def _load_policy_init_checkpoint(runner, checkpoint: str, device: str) -> None:
         raise KeyError(f"Checkpoint is missing model_state_dict: {checkpoint_path}")
 
     # This intentionally loads only actor-critic weights. Optimizer, AMP discriminator, and iteration state stay fresh.
-    runner.alg.policy.load_state_dict(loaded_dict["model_state_dict"], strict=True)
-    print(f"[INFO] Initialized policy weights from checkpoint: {checkpoint_path}")
+    source_state = loaded_dict["model_state_dict"]
+    target_state = runner.alg.policy.state_dict()
+    compatible_state, skipped_keys, converted_std_to_log_std = _compatible_policy_init_state(
+        source_state, target_state
+    )
+    if converted_std_to_log_std:
+        print("[INFO] Converted checkpoint policy std -> log_std for policy warm-start.")
+
+    target_state.update(compatible_state)
+    runner.alg.policy.load_state_dict(target_state, strict=True)
+    if skipped_keys:
+        print(f"[WARN] Skipped incompatible policy warm-start keys: {', '.join(skipped_keys)}")
+    print(
+        f"[INFO] Initialized {len(compatible_state)}/{len(target_state)} policy tensors from checkpoint: "
+        f"{checkpoint_path}"
+    )
 
 
 def main():
