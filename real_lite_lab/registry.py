@@ -10,6 +10,8 @@ from .walk_forward_cfg import (
     RealLiteWalkForwardEnvCfg,
     RealLiteWalkGmrForwardAgentCfg,
     RealLiteWalkGmrForwardEnvCfg,
+    RealLiteWalkGmrSlowAgentCfg,
+    RealLiteWalkGmrSlowEnvCfg,
 )
 from .walk_cfg import RealLiteWalkAgentCfg, RealLiteWalkEnvCfg
 
@@ -26,6 +28,9 @@ def register_tasks():
     )
     task_registry.register(
         "walk_gmr_forward_real_lite", RealLiteEnv, RealLiteWalkGmrForwardEnvCfg(), RealLiteWalkGmrForwardAgentCfg()
+    )
+    task_registry.register(
+        "walk_gmr_slow_real_lite", RealLiteEnv, RealLiteWalkGmrSlowEnvCfg(), RealLiteWalkGmrSlowAgentCfg()
     )
     task_registry.register("stand_real_lite", RealLiteEnv, RealLiteStandEnvCfg(), RealLiteStandAgentCfg())
     task_registry.register("run_real_lite", RealLiteEnv, RealLiteRunEnvCfg(), RealLiteRunAgentCfg())
