@@ -43,6 +43,12 @@ class WalkForwardTaskMetadataTests(unittest.TestCase):
             },
         )
 
+    def test_walk_forward_cfg_does_not_copy_configclass_fields_from_class(self) -> None:
+        cfg_text = (REPO_ROOT / "real_lite_lab" / "walk_forward_cfg.py").read_text(encoding="utf-8")
+
+        self.assertNotIn("RealLiteWalkEnvCfg.scene", cfg_text)
+        self.assertNotIn("RealLiteWalkEnvCfg.robot", cfg_text)
+
 
 if __name__ == "__main__":
     unittest.main()

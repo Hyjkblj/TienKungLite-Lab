@@ -17,10 +17,22 @@ from .base_config import (
     CommandsCfg,
     DomainRandCfg,
     EventCfg,
+    HeightScannerCfg,
     NoiseCfg,
     NoiseScalesCfg,
+    RobotCfg,
 )
-from .constants import POLICY_JOINT_COUNT, TASK_PRESETS
+from .constants import (
+    ANKLE_JOINT_NAMES,
+    ELBOW_LINK_NAMES,
+    FEET_LINK_NAMES,
+    LEFT_ARM_JOINT_NAMES,
+    LEFT_LEG_JOINT_NAMES,
+    POLICY_JOINT_COUNT,
+    RIGHT_ARM_JOINT_NAMES,
+    RIGHT_LEG_JOINT_NAMES,
+    TASK_PRESETS,
+)
 from .stand_cfg import STAND_ROOT_Z
 from .walk_cfg import RealLiteGaitCfg, RealLiteRewardCfg, RealLiteWalkAgentCfg, RealLiteWalkEnvCfg
 
@@ -66,13 +78,37 @@ class RealLiteWalkForwardRewardCfg(RealLiteRewardCfg):
 @configclass
 class RealLiteWalkForwardEnvCfg(RealLiteWalkEnvCfg):
     amp_motion_files_display = [str(TASK_PRESETS["walk_forward_real_lite"]["display_motion_file"])]
-    scene: BaseSceneCfg = copy.deepcopy(RealLiteWalkEnvCfg.scene)
-    scene.robot = WALK_FORWARD_ARTICULATION_CFG
-    scene.terrain_type = "plane"
-    scene.terrain_generator = None
-    scene.max_init_terrain_level = 0
-    robot = copy.deepcopy(RealLiteWalkEnvCfg.robot)
-    robot.action_scale = 0.18
+    scene: BaseSceneCfg = BaseSceneCfg(
+        max_episode_length_s=20.0,
+        num_envs=4096,
+        env_spacing=2.5,
+        robot=WALK_FORWARD_ARTICULATION_CFG,
+        terrain_type="plane",
+        terrain_generator=None,
+        max_init_terrain_level=0,
+        height_scanner=HeightScannerCfg(
+            enable_height_scan=False,
+            prim_body_name="pelvis",
+            resolution=0.1,
+            size=(1.6, 1.0),
+            debug_vis=False,
+            drift_range=(0.0, 0.0),
+        ),
+    )
+    robot: RobotCfg = RobotCfg(
+        actor_obs_history_length=10,
+        critic_obs_history_length=10,
+        action_scale=0.18,
+        terminate_contacts_body_names=["knee_pitch.*", "shoulder_roll.*", "elbow_.*", "pelvis"],
+        feet_body_names=["ankle_roll.*"],
+        left_leg_joint_names=LEFT_LEG_JOINT_NAMES,
+        right_leg_joint_names=RIGHT_LEG_JOINT_NAMES,
+        left_arm_joint_names=LEFT_ARM_JOINT_NAMES,
+        right_arm_joint_names=RIGHT_ARM_JOINT_NAMES,
+        ankle_joint_names=ANKLE_JOINT_NAMES,
+        feet_link_names=FEET_LINK_NAMES,
+        elbow_link_names=ELBOW_LINK_NAMES,
+    )
     reward = RealLiteWalkForwardRewardCfg()
     gait = RealLiteGaitCfg()
     commands: CommandsCfg = CommandsCfg(
