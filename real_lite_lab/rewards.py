@@ -12,15 +12,44 @@ if TYPE_CHECKING:
     from .env import RealLiteEnv
 
 
+def _root_lin_vel_yaw_frame(env: "RealLiteEnv", asset_cfg: SceneEntityCfg) -> torch.Tensor:
+    asset: Articulation = env.scene[asset_cfg.name]
+    return math_utils.quat_rotate_inverse(
+        math_utils.yaw_quat(asset.data.root_quat_w), asset.data.root_lin_vel_w[:, :3]
+    )
+
+
 def track_lin_vel_xy_yaw_frame_exp(
     env: "RealLiteEnv", std: float, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
 ) -> torch.Tensor:
-    asset: Articulation = env.scene[asset_cfg.name]
-    vel_yaw = math_utils.quat_rotate_inverse(
-        math_utils.yaw_quat(asset.data.root_quat_w), asset.data.root_lin_vel_w[:, :3]
-    )
+    vel_yaw = _root_lin_vel_yaw_frame(env, asset_cfg)
     lin_vel_error = torch.sum(torch.square(env.command_generator.command[:, :2] - vel_yaw[:, :2]), dim=1)
     return torch.exp(-lin_vel_error / std**2)
+
+
+def track_lin_vel_x_yaw_frame_exp(
+    env: "RealLiteEnv", std: float, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    vel_yaw = _root_lin_vel_yaw_frame(env, asset_cfg)
+    lin_vel_error = torch.square(env.command_generator.command[:, 0] - vel_yaw[:, 0])
+    return torch.exp(-lin_vel_error / std**2)
+
+
+def forward_velocity_yaw_frame(env: "RealLiteEnv", asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    vel_yaw = _root_lin_vel_yaw_frame(env, asset_cfg)
+    return torch.clamp(vel_yaw[:, 0], min=0.0)
+
+
+def backward_velocity_yaw_frame_l2(
+    env: "RealLiteEnv", asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    vel_yaw = _root_lin_vel_yaw_frame(env, asset_cfg)
+    return torch.square(torch.clamp(-vel_yaw[:, 0], min=0.0))
+
+
+def lin_vel_y_yaw_frame_l2(env: "RealLiteEnv", asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    vel_yaw = _root_lin_vel_yaw_frame(env, asset_cfg)
+    return torch.square(vel_yaw[:, 1])
 
 
 def track_ang_vel_z_world_exp(

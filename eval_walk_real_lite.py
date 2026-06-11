@@ -174,8 +174,8 @@ def main() -> None:
         raise ValueError("--max_lateral_drift_abs must be non-negative.")
     if args_cli.min_yaw_rate_ratio < 0.0:
         raise ValueError("--min_yaw_rate_ratio must be non-negative.")
-    if args_cli.task not in {"walk_real_lite", "run_real_lite"}:
-        raise ValueError("eval_walk_real_lite.py expects walk_real_lite or run_real_lite.")
+    if args_cli.task not in {"walk_real_lite", "walk_forward_real_lite", "run_real_lite"}:
+        raise ValueError("eval_walk_real_lite.py expects walk_real_lite, walk_forward_real_lite, or run_real_lite.")
 
     register_tasks()
     env_cfg, agent_cfg = task_registry.get_cfgs(args_cli.task)
