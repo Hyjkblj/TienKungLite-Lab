@@ -55,6 +55,15 @@ class WalkForwardTaskMetadataTests(unittest.TestCase):
         self.assertIn('noise_std_type="log"', cfg_text)
         self.assertIn("learning_rate=3.0e-4", cfg_text)
 
+    def test_walk_forward_v2_penalizes_velocity_shortfall(self) -> None:
+        cfg_text = (REPO_ROOT / "real_lite_lab" / "walk_forward_cfg.py").read_text(encoding="utf-8")
+        rewards_text = (REPO_ROOT / "real_lite_lab" / "rewards.py").read_text(encoding="utf-8")
+
+        self.assertIn("lin_vel_x_shortfall", cfg_text)
+        self.assertIn("weight=-8.0", cfg_text)
+        self.assertIn("def lin_vel_x_shortfall_l1", rewards_text)
+        self.assertIn("amp_task_reward_lerp = 0.97", cfg_text)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -44,11 +44,12 @@ WALK_FORWARD_ARTICULATION_CFG.init_state.pos = (0.0, 0.0, STAND_ROOT_Z)
 
 @configclass
 class RealLiteWalkForwardRewardCfg(RealLiteRewardCfg):
-    track_lin_vel_xy_exp = RewTerm(func=rl_rewards.track_lin_vel_xy_yaw_frame_exp, weight=2.0, params={"std": 0.2})
-    track_lin_vel_x_exp = RewTerm(func=rl_rewards.track_lin_vel_x_yaw_frame_exp, weight=3.0, params={"std": 0.15})
-    forward_velocity = RewTerm(func=rl_rewards.forward_velocity_yaw_frame, weight=1.0)
-    backward_velocity_l2 = RewTerm(func=rl_rewards.backward_velocity_yaw_frame_l2, weight=-4.0)
-    lin_vel_y_l2 = RewTerm(func=rl_rewards.lin_vel_y_yaw_frame_l2, weight=-1.0)
+    track_lin_vel_xy_exp = RewTerm(func=rl_rewards.track_lin_vel_xy_yaw_frame_exp, weight=1.0, params={"std": 0.12})
+    track_lin_vel_x_exp = RewTerm(func=rl_rewards.track_lin_vel_x_yaw_frame_exp, weight=5.0, params={"std": 0.08})
+    forward_velocity = RewTerm(func=rl_rewards.forward_velocity_yaw_frame, weight=4.0)
+    lin_vel_x_shortfall = RewTerm(func=rl_rewards.lin_vel_x_shortfall_l1, weight=-8.0)
+    backward_velocity_l2 = RewTerm(func=rl_rewards.backward_velocity_yaw_frame_l2, weight=-8.0)
+    lin_vel_y_l2 = RewTerm(func=rl_rewards.lin_vel_y_yaw_frame_l2, weight=-2.0)
     track_ang_vel_z_exp = RewTerm(func=rl_rewards.track_ang_vel_z_world_exp, weight=0.5, params={"std": 0.25})
     body_orientation_l2 = RewTerm(
         func=rl_rewards.body_orientation_l2,
@@ -74,6 +75,11 @@ class RealLiteWalkForwardRewardCfg(RealLiteRewardCfg):
     )
     hip_roll_action = RewTerm(func=rl_rewards.hip_roll_action, weight=-0.5)
     hip_yaw_action = RewTerm(func=rl_rewards.hip_yaw_action, weight=-0.5)
+    gait_feet_frc_perio = RewTerm(func=rl_rewards.gait_feet_frc_perio, weight=0.2, params={"delta_t": 0.02})
+    gait_feet_spd_perio = RewTerm(func=rl_rewards.gait_feet_spd_perio, weight=0.2, params={"delta_t": 0.02})
+    gait_feet_frc_support_perio = RewTerm(
+        func=rl_rewards.gait_feet_frc_support_perio, weight=0.1, params={"delta_t": 0.02}
+    )
 
 
 @configclass
@@ -202,6 +208,6 @@ class RealLiteWalkForwardAgentCfg(RealLiteWalkAgentCfg):
     neptune_project = "walk_forward_real_lite"
     wandb_project = "walk_forward_real_lite"
     amp_motion_files = [str(TASK_PRESETS["walk_forward_real_lite"]["amp_motion_file"])]
-    amp_reward_coef = 0.15
-    amp_task_reward_lerp = 0.9
+    amp_reward_coef = 0.05
+    amp_task_reward_lerp = 0.97
     min_normalized_std = [0.03] * POLICY_JOINT_COUNT
