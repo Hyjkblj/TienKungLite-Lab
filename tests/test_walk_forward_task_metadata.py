@@ -64,6 +64,34 @@ class WalkForwardTaskMetadataTests(unittest.TestCase):
         self.assertIn("def lin_vel_x_shortfall_l1", rewards_text)
         self.assertIn("amp_task_reward_lerp = 0.97", cfg_text)
 
+    def test_gmr_crawl_task_uses_slow_gmr_motion_and_low_speed_range(self) -> None:
+        constants = load_module(CONSTANTS_PATH, "test_walk_gmr_crawl_constants_module")
+
+        self.assertIn("walk_gmr_crawl_real_lite", constants.TASK_NAMES)
+        preset = constants.TASK_PRESETS["walk_gmr_crawl_real_lite"]
+        self.assertEqual(preset["gait_cycle"], 2.88)
+        self.assertEqual(preset["amp_motion_file"].parts[-2:], ("motion_amp_expert", "walk_gmr_slow.txt"))
+        self.assertEqual(preset["display_motion_file"].parts[-2:], ("motion_visualization", "walk_gmr_slow.txt"))
+
+        from real_lite_lab import alignment_config
+
+        self.assertEqual(
+            alignment_config.TASK_COMMAND_RANGES["walk_gmr_crawl_real_lite"],
+            {
+                "lin_vel_x": (0.08, 0.22),
+                "lin_vel_y": (0.0, 0.0),
+                "ang_vel_z": (0.0, 0.0),
+            },
+        )
+
+    def test_gmr_slow_and_crawl_configs_use_slow_gait_cycle(self) -> None:
+        cfg_text = (REPO_ROOT / "real_lite_lab" / "walk_forward_cfg.py").read_text(encoding="utf-8")
+
+        self.assertIn("class RealLiteWalkGmrSlowGaitCfg", cfg_text)
+        self.assertIn("gait = RealLiteWalkGmrSlowGaitCfg()", cfg_text)
+        self.assertIn('experiment_name = "walk_gmr_crawl_real_lite"', cfg_text)
+        self.assertIn("amp_reward_coef = 0.02", cfg_text)
+
 
 if __name__ == "__main__":
     unittest.main()

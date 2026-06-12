@@ -179,11 +179,12 @@ def main() -> None:
         "walk_forward_real_lite",
         "walk_gmr_forward_real_lite",
         "walk_gmr_slow_real_lite",
+        "walk_gmr_crawl_real_lite",
         "run_real_lite",
     }:
         raise ValueError(
             "eval_walk_real_lite.py expects walk_real_lite, walk_forward_real_lite, "
-            "walk_gmr_forward_real_lite, walk_gmr_slow_real_lite, or run_real_lite."
+            "walk_gmr_forward_real_lite, walk_gmr_slow_real_lite, walk_gmr_crawl_real_lite, or run_real_lite."
         )
 
     register_tasks()

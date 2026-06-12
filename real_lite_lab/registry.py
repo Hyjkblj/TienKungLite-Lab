@@ -8,6 +8,8 @@ from .upper_body_cfg import RealLiteUpperBodyAgentCfg, RealLiteUpperBodyEnvCfg
 from .walk_forward_cfg import (
     RealLiteWalkForwardAgentCfg,
     RealLiteWalkForwardEnvCfg,
+    RealLiteWalkGmrCrawlAgentCfg,
+    RealLiteWalkGmrCrawlEnvCfg,
     RealLiteWalkGmrForwardAgentCfg,
     RealLiteWalkGmrForwardEnvCfg,
     RealLiteWalkGmrSlowAgentCfg,
@@ -31,6 +33,9 @@ def register_tasks():
     )
     task_registry.register(
         "walk_gmr_slow_real_lite", RealLiteEnv, RealLiteWalkGmrSlowEnvCfg(), RealLiteWalkGmrSlowAgentCfg()
+    )
+    task_registry.register(
+        "walk_gmr_crawl_real_lite", RealLiteEnv, RealLiteWalkGmrCrawlEnvCfg(), RealLiteWalkGmrCrawlAgentCfg()
     )
     task_registry.register("stand_real_lite", RealLiteEnv, RealLiteStandEnvCfg(), RealLiteStandAgentCfg())
     task_registry.register("run_real_lite", RealLiteEnv, RealLiteRunEnvCfg(), RealLiteRunAgentCfg())

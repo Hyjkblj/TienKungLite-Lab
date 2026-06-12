@@ -241,6 +241,15 @@ class RealLiteWalkGmrForwardAgentCfg(RealLiteWalkForwardAgentCfg):
 
 
 @configclass
+class RealLiteWalkGmrSlowGaitCfg(RealLiteGaitCfg):
+    gait_air_ratio_l: float = TASK_PRESETS["walk_gmr_slow_real_lite"]["gait_air_ratio_l"]
+    gait_air_ratio_r: float = TASK_PRESETS["walk_gmr_slow_real_lite"]["gait_air_ratio_r"]
+    gait_phase_offset_l: float = TASK_PRESETS["walk_gmr_slow_real_lite"]["gait_phase_offset_l"]
+    gait_phase_offset_r: float = TASK_PRESETS["walk_gmr_slow_real_lite"]["gait_phase_offset_r"]
+    gait_cycle: float = TASK_PRESETS["walk_gmr_slow_real_lite"]["gait_cycle"]
+
+
+@configclass
 class RealLiteWalkGmrSlowRewardCfg(RealLiteWalkForwardRewardCfg):
     track_lin_vel_xy_exp = RewTerm(func=rl_rewards.track_lin_vel_xy_yaw_frame_exp, weight=1.5, params={"std": 0.10})
     track_lin_vel_x_exp = RewTerm(func=rl_rewards.track_lin_vel_x_yaw_frame_exp, weight=7.0, params={"std": 0.07})
@@ -275,6 +284,7 @@ class RealLiteWalkGmrSlowEnvCfg(RealLiteWalkForwardEnvCfg):
         elbow_link_names=ELBOW_LINK_NAMES,
     )
     reward = RealLiteWalkGmrSlowRewardCfg()
+    gait = RealLiteWalkGmrSlowGaitCfg()
     commands: CommandsCfg = CommandsCfg(
         resampling_time_range=(10.0, 10.0),
         rel_standing_envs=0.0,
@@ -297,3 +307,133 @@ class RealLiteWalkGmrSlowAgentCfg(RealLiteWalkForwardAgentCfg):
     neptune_project = "walk_gmr_slow_real_lite"
     wandb_project = "walk_gmr_slow_real_lite"
     amp_motion_files = [str(TASK_PRESETS["walk_gmr_slow_real_lite"]["amp_motion_file"])]
+
+
+@configclass
+class RealLiteWalkGmrCrawlRewardCfg(RealLiteWalkForwardRewardCfg):
+    track_lin_vel_xy_exp = RewTerm(func=rl_rewards.track_lin_vel_xy_yaw_frame_exp, weight=1.2, params={"std": 0.18})
+    track_lin_vel_x_exp = RewTerm(func=rl_rewards.track_lin_vel_x_yaw_frame_exp, weight=3.0, params={"std": 0.12})
+    forward_velocity = RewTerm(func=rl_rewards.forward_velocity_yaw_frame, weight=1.5)
+    lin_vel_x_shortfall = RewTerm(func=rl_rewards.lin_vel_x_shortfall_l1, weight=-3.0)
+    lin_vel_x_overshoot = RewTerm(func=rl_rewards.lin_vel_x_overshoot_l1, weight=-2.0)
+    backward_velocity_l2 = RewTerm(func=rl_rewards.backward_velocity_yaw_frame_l2, weight=-4.0)
+    lin_vel_y_l2 = RewTerm(func=rl_rewards.lin_vel_y_yaw_frame_l2, weight=-3.0)
+    body_orientation_l2 = RewTerm(
+        func=rl_rewards.body_orientation_l2,
+        params={"asset_cfg": SceneEntityCfg("robot", body_names="pelvis")},
+        weight=-5.0,
+    )
+    flat_orientation_l2 = RewTerm(func=rl_rewards.flat_orientation_l2, weight=-2.5)
+    action_rate_l2 = RewTerm(func=rl_rewards.action_rate_l2, weight=-0.008)
+    hip_roll_action = RewTerm(func=rl_rewards.hip_roll_action, weight=-0.7)
+    hip_yaw_action = RewTerm(func=rl_rewards.hip_yaw_action, weight=-0.7)
+    gait_feet_frc_perio = RewTerm(func=rl_rewards.gait_feet_frc_perio, weight=0.08, params={"delta_t": 0.02})
+    gait_feet_spd_perio = RewTerm(func=rl_rewards.gait_feet_spd_perio, weight=0.08, params={"delta_t": 0.02})
+    gait_feet_frc_support_perio = RewTerm(
+        func=rl_rewards.gait_feet_frc_support_perio, weight=0.05, params={"delta_t": 0.02}
+    )
+
+
+@configclass
+class RealLiteWalkGmrCrawlEnvCfg(RealLiteWalkForwardEnvCfg):
+    amp_motion_files_display = [str(TASK_PRESETS["walk_gmr_crawl_real_lite"]["display_motion_file"])]
+    robot: RobotCfg = RobotCfg(
+        actor_obs_history_length=10,
+        critic_obs_history_length=10,
+        action_scale=0.12,
+        terminate_contacts_body_names=["knee_pitch.*", "shoulder_roll.*", "elbow_.*", "pelvis"],
+        feet_body_names=["ankle_roll.*"],
+        left_leg_joint_names=LEFT_LEG_JOINT_NAMES,
+        right_leg_joint_names=RIGHT_LEG_JOINT_NAMES,
+        left_arm_joint_names=LEFT_ARM_JOINT_NAMES,
+        right_arm_joint_names=RIGHT_ARM_JOINT_NAMES,
+        ankle_joint_names=ANKLE_JOINT_NAMES,
+        feet_link_names=FEET_LINK_NAMES,
+        elbow_link_names=ELBOW_LINK_NAMES,
+    )
+    reward = RealLiteWalkGmrCrawlRewardCfg()
+    gait = RealLiteWalkGmrSlowGaitCfg()
+    commands: CommandsCfg = CommandsCfg(
+        resampling_time_range=(10.0, 10.0),
+        rel_standing_envs=0.0,
+        rel_heading_envs=0.0,
+        heading_command=False,
+        heading_control_stiffness=0.0,
+        debug_vis=False,
+        ranges=CommandRangesCfg(
+            lin_vel_x=(0.08, 0.22),
+            lin_vel_y=(0.0, 0.0),
+            ang_vel_z=(0.0, 0.0),
+            heading=(0.0, 0.0),
+        ),
+    )
+    noise: NoiseCfg = NoiseCfg(add_noise=False)
+    domain_rand: DomainRandCfg = DomainRandCfg(
+        events=EventCfg(
+            physics_material=None,
+            add_base_mass=None,
+            reset_base=EventTerm(
+                func=base_mdp.reset_root_state_uniform,
+                mode="reset",
+                params={
+                    "pose_range": {"x": (0.0, 0.0), "y": (0.0, 0.0), "yaw": (-0.02, 0.02)},
+                    "velocity_range": {
+                        "x": (0.0, 0.0),
+                        "y": (0.0, 0.0),
+                        "z": (0.0, 0.0),
+                        "roll": (-0.01, 0.01),
+                        "pitch": (-0.01, 0.01),
+                        "yaw": (-0.01, 0.01),
+                    },
+                },
+            ),
+            reset_robot_joints=EventTerm(
+                func=base_mdp.reset_joints_by_scale,
+                mode="reset",
+                params={
+                    "position_range": (0.995, 1.005),
+                    "velocity_range": (0.0, 0.0),
+                },
+            ),
+            push_robot=None,
+        ),
+        action_delay=ActionDelayCfg(enable=False, params={"max_delay": 5, "min_delay": 0}),
+    )
+
+
+@configclass
+class RealLiteWalkGmrCrawlAgentCfg(RealLiteWalkForwardAgentCfg):
+    max_iterations = 4000
+    policy = RslRlPpoActorCriticCfg(
+        class_name="ActorCritic",
+        init_noise_std=0.35,
+        noise_std_type="log",
+        actor_hidden_dims=[512, 256, 128],
+        critic_hidden_dims=[512, 256, 128],
+        activation="elu",
+    )
+    algorithm = RslRlPpoAlgorithmCfg(
+        class_name="AMPPPO",
+        value_loss_coef=1.0,
+        use_clipped_value_loss=True,
+        clip_param=0.2,
+        entropy_coef=0.001,
+        num_learning_epochs=5,
+        num_mini_batches=4,
+        learning_rate=3.0e-4,
+        schedule="adaptive",
+        gamma=0.99,
+        lam=0.95,
+        desired_kl=0.01,
+        max_grad_norm=1.0,
+        normalize_advantage_per_mini_batch=False,
+        symmetry_cfg=None,
+        rnd_cfg=None,
+    )
+    experiment_name = "walk_gmr_crawl_real_lite"
+    neptune_project = "walk_gmr_crawl_real_lite"
+    wandb_project = "walk_gmr_crawl_real_lite"
+    amp_motion_files = [str(TASK_PRESETS["walk_gmr_crawl_real_lite"]["amp_motion_file"])]
+    amp_reward_coef = 0.02
+    amp_task_reward_lerp = 0.99
+    min_normalized_std = [0.02] * POLICY_JOINT_COUNT
