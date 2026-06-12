@@ -21,6 +21,11 @@ parser.add_argument("--num_envs", type=int, default=None, help="Number of enviro
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
 parser.add_argument("--save_path", type=str, default=None, help="Path to save the txt file")
 parser.add_argument("--fps", type=float, default=30.0, help="Target fps")
+parser.add_argument(
+    "--export_full_duration",
+    action="store_true",
+    help="When saving AMP expert data, sample the full display motion duration at --fps instead of one source frame per sample.",
+)
 
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
@@ -85,18 +90,17 @@ def play_amp_animation():
     try:
         env = env_class(env_cfg, args_cli.headless)
 
-        frame_cnt = 0
         all_frames = []
-        while simulation_app.is_running():
-            while True:
-                time = (frame_cnt % env.motion_len) * (1.0 / args_cli.fps)
-                frame = env.visualize_motion(time)
-                if args_cli.save_path:
-                    all_frames.append(frame.cpu().numpy().reshape(-1))
-                frame_cnt += 1
-                if frame_cnt >= (env.motion_len - 1):
-                    break
-            break
+        if args_cli.export_full_duration:
+            sample_count = max(1, int(np.floor(float(env.amp_loader_display.trajectory_lens[0]) * args_cli.fps)))
+        else:
+            sample_count = max(1, int(env.motion_len - 1))
+
+        for frame_cnt in range(sample_count):
+            time = frame_cnt * (1.0 / args_cli.fps)
+            frame = env.visualize_motion(time)
+            if args_cli.save_path:
+                all_frames.append(frame.cpu().numpy().reshape(-1))
 
         if args_cli.save_path:
             _write_amp_expert_motion(args_cli.save_path, all_frames, args_cli.fps)

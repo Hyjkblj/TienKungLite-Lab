@@ -178,9 +178,9 @@ TASK_PRESETS = {
         "gait_air_ratio_r": 0.38,
         "gait_phase_offset_l": 0.38,
         "gait_phase_offset_r": 0.88,
-        "gait_cycle": 0.85,
-        "amp_motion_file": DATASETS_DIR / "motion_amp_expert" / "walk_gmr_forward.txt",
-        "display_motion_file": DATASETS_DIR / "motion_visualization" / "walk_gmr_forward.txt",
+        "gait_cycle": 2.88,
+        "amp_motion_file": DATASETS_DIR / "motion_amp_expert" / "walk_gmr_slow.txt",
+        "display_motion_file": DATASETS_DIR / "motion_visualization" / "walk_gmr_slow.txt",
     },
     "run_real_lite": {
         "gait_air_ratio_l": 0.6,
