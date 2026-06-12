@@ -45,6 +45,11 @@ def lin_vel_x_shortfall_l1(env: "RealLiteEnv", asset_cfg: SceneEntityCfg = Scene
     return torch.clamp(env.command_generator.command[:, 0] - vel_yaw[:, 0], min=0.0)
 
 
+def lin_vel_x_overshoot_l1(env: "RealLiteEnv", asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    vel_yaw = _root_lin_vel_yaw_frame(env, asset_cfg)
+    return torch.clamp(vel_yaw[:, 0] - env.command_generator.command[:, 0], min=0.0)
+
+
 def backward_velocity_yaw_frame_l2(
     env: "RealLiteEnv", asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
 ) -> torch.Tensor:

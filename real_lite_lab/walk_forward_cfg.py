@@ -241,8 +241,40 @@ class RealLiteWalkGmrForwardAgentCfg(RealLiteWalkForwardAgentCfg):
 
 
 @configclass
+class RealLiteWalkGmrSlowRewardCfg(RealLiteWalkForwardRewardCfg):
+    track_lin_vel_xy_exp = RewTerm(func=rl_rewards.track_lin_vel_xy_yaw_frame_exp, weight=1.5, params={"std": 0.10})
+    track_lin_vel_x_exp = RewTerm(func=rl_rewards.track_lin_vel_x_yaw_frame_exp, weight=7.0, params={"std": 0.07})
+    forward_velocity = RewTerm(func=rl_rewards.forward_velocity_yaw_frame, weight=0.0)
+    lin_vel_x_shortfall = RewTerm(func=rl_rewards.lin_vel_x_shortfall_l1, weight=-10.0)
+    lin_vel_x_overshoot = RewTerm(func=rl_rewards.lin_vel_x_overshoot_l1, weight=-14.0)
+    backward_velocity_l2 = RewTerm(func=rl_rewards.backward_velocity_yaw_frame_l2, weight=-10.0)
+    lin_vel_y_l2 = RewTerm(func=rl_rewards.lin_vel_y_yaw_frame_l2, weight=-3.0)
+    body_orientation_l2 = RewTerm(
+        func=rl_rewards.body_orientation_l2,
+        params={"asset_cfg": SceneEntityCfg("robot", body_names="pelvis")},
+        weight=-5.0,
+    )
+    flat_orientation_l2 = RewTerm(func=rl_rewards.flat_orientation_l2, weight=-2.5)
+
+
+@configclass
 class RealLiteWalkGmrSlowEnvCfg(RealLiteWalkForwardEnvCfg):
     amp_motion_files_display = [str(TASK_PRESETS["walk_gmr_slow_real_lite"]["display_motion_file"])]
+    robot: RobotCfg = RobotCfg(
+        actor_obs_history_length=10,
+        critic_obs_history_length=10,
+        action_scale=0.14,
+        terminate_contacts_body_names=["knee_pitch.*", "shoulder_roll.*", "elbow_.*", "pelvis"],
+        feet_body_names=["ankle_roll.*"],
+        left_leg_joint_names=LEFT_LEG_JOINT_NAMES,
+        right_leg_joint_names=RIGHT_LEG_JOINT_NAMES,
+        left_arm_joint_names=LEFT_ARM_JOINT_NAMES,
+        right_arm_joint_names=RIGHT_ARM_JOINT_NAMES,
+        ankle_joint_names=ANKLE_JOINT_NAMES,
+        feet_link_names=FEET_LINK_NAMES,
+        elbow_link_names=ELBOW_LINK_NAMES,
+    )
+    reward = RealLiteWalkGmrSlowRewardCfg()
     commands: CommandsCfg = CommandsCfg(
         resampling_time_range=(10.0, 10.0),
         rel_standing_envs=0.0,
